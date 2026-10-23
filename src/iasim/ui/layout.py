@@ -198,6 +198,7 @@ def render_base_screen(
     focus_mode: bool = False,
     usage: Mapping[AgentId, AgentUsage] | None = None,
     mind_reports: Mapping[AgentId, MindReport] | None = None,
+    waiting_reason: str | None = None,
 ) -> BaseScreen:
     """Render the deterministic base screen without mutating the session."""
     canvas = _Canvas()
@@ -216,6 +217,7 @@ def render_base_screen(
         ascii_mode=ascii_mode,
         usage=usage,
         mind_reports=mind_reports,
+        waiting_reason=waiting_reason,
     )
     _render_bottom_bar(canvas, ascii_mode)
     return canvas.to_screen()
@@ -375,6 +377,7 @@ def _render_panel(
     ascii_mode: bool,
     usage: Mapping[AgentId, AgentUsage] | None,
     mind_reports: Mapping[AgentId, MindReport] | None,
+    waiting_reason: str | None,
 ) -> None:
     canvas.fill(
         PANEL_X,
@@ -392,6 +395,11 @@ def _render_panel(
     clock = SimulationClock(state.tick_minutes)
     clock.advance(state.tick)
     phase = _PHASE_LABELS[clock.phase]
+    status_label = "PAUSA" if paused else "EN CURSO"
+    if waiting_reason is not None:
+        status_label = "ESPERANDO AGENTES"
+        if waiting_reason == "last_death":
+            status_label += " · ÚLTIMA MUERTE"
     _panel(
         canvas,
         0,
@@ -403,8 +411,7 @@ def _render_panel(
     _panel(
         canvas,
         1,
-        f"{'PAUSA' if paused else 'EN CURSO'} · VEL {speed}x · "
-        f"AGENTES {len(state.agents)}/{capacity}",
+        f"{status_label} · VEL {speed}x · AGENTES {len(state.agents)}/{capacity}",
         fg=theme.CYAN,
     )
     _panel(canvas, 2, separator, fg=theme.DIM)

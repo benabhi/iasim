@@ -664,7 +664,7 @@ Leyenda de prioridad:
 | RF-904 | El sistema debe permitir huir y aplicar sangrado con venda. | M | F1 |
 | RF-905 | La muerte debe ser permanente y generar un cadáver saqueable. | M | F1 |
 | RF-906 | El sistema debe registrar autor, causa y tick de cada muerte. | M | F1 |
-| RF-907 | La sesión debe terminar cuando muere el último agente vivo. | M | F1 |
+| RF-907 | La muerte del último agente vivo no debe finalizar el servidor; la simulación queda esperando y el operador decide cuándo terminar o reiniciar. | M | F1 |
 | RF-908 | La UI debe mostrar cadáveres, causa de muerte y botín disponible. | M | F1 |
 | RF-909 | En fase 2 se agrega fauna pasiva y pesca como alimento; depredadores complejos y NPCs sociales quedan fuera de alcance. | S | F2 |
 | RF-910 | Armaduras, infecciones y heridas avanzadas quedan para fase 2. | C | F2 |
@@ -1340,7 +1340,7 @@ La observación es el contrato principal entre el juego y el agente. Ejemplo abr
 Campos obligatorios:
 
 - `schema_version`, `tick`, `session`, `server_time_ms`, `deadline_ms`.
-- `session.phase` es `waiting`, `running` o `finished`; incluye `max_agents`, `joined_agents` y `alive_agents`, y `end_reason` si terminó.
+- `session.phase` es `waiting`, `running` o `finished`; incluye `max_agents`, `joined_agents` y `alive_agents`, `waiting_reason` si está esperando (`no_agents`, `no_active_agents` o `last_death`) y `end_reason` si terminó.
 - `time`, `agent`, `environment`.
 - `perception.visible`, `perception.memory_updates`, `perception.agents`, `perception.messages`.
 - `inventory` y `available_actions`.
