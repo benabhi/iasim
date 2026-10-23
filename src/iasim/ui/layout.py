@@ -11,8 +11,10 @@ from iasim.domain.clock import DayPhase, SimulationClock
 from iasim.domain.geometry import Position
 from iasim.domain.identifiers import AgentId
 from iasim.domain.session import SessionState
+from iasim.domain.tiles import TileType
 from iasim.domain.world import StructureKind
 from iasim.ui import theme
+from iasim.ui.controls import KEY_GUIDE, STATUS_GUIDE
 
 SCREEN_WIDTH = 160
 SCREEN_HEIGHT = 45
@@ -29,6 +31,8 @@ BOTTOM_BAR = (
     "[ESPACIO] Pausa │ [1-8/TAB] Agente │ [+/-] Vel │ [F1] Ayuda │ [F2] Agente │ "
     "[F3] Mundo │ [F4] Log │ [F5] Replay │ [F6] Mapa │ [F9] Guardar │ [Q] Salir"
 )
+
+HELP_FOOTER = "ESC volver │ F1 cerrar ayuda │ A ASCII │ Q/R requieren confirmación"
 
 _PHASE_LABELS: dict[DayPhase, str] = {
     DayPhase.DAWN: "AMANECER",
@@ -166,12 +170,13 @@ def render_base_screen(
     paused: bool = False,
     speed: int = 1,
     capacity: int = 8,
+    ascii_mode: bool = False,
 ) -> BaseScreen:
     """Render the deterministic base screen without mutating the session."""
     canvas = _Canvas()
     canvas.fill(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, fg=theme.WHITE, bg=theme.BLACK)
-    _render_map(canvas, state, selected_agent_id)
-    _render_ticker(canvas, events)
+    _render_map(canvas, state, selected_agent_id, ascii_mode)
+    _render_ticker(canvas, events, ascii_mode)
     _render_panel(
         canvas,
         state,
@@ -181,8 +186,81 @@ def render_base_screen(
         paused=paused,
         speed=speed,
         capacity=capacity,
+        ascii_mode=ascii_mode,
     )
-    _render_bottom_bar(canvas)
+    _render_bottom_bar(canvas, ascii_mode)
+    return canvas.to_screen()
+
+
+def render_help_screen(*, ascii_mode: bool = False) -> BaseScreen:
+    """Render the keyboard and glyph/status legend help view."""
+    canvas = _Canvas()
+    canvas.fill(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, fg=theme.WHITE, bg=theme.BLACK)
+    canvas.put(2, 0, "AYUDA Y LEYENDA", fg=theme.CYAN, bold=True)
+    canvas.put(
+        2,
+        1,
+        "IASim · controles del operador · los pensamientos son reportados, no verificados",
+        fg=theme.DIM,
+    )
+
+    left_x = 2
+    right_x = 82
+    left_y = 3
+    canvas.put(left_x, left_y, "CONTROLES", fg=theme.CYAN, bold=True)
+    for offset, (key, description) in enumerate(KEY_GUIDE, start=1):
+        canvas.put(
+            left_x,
+            left_y + offset,
+            f"{key:<10} {description}",
+            fg=theme.WHITE,
+        )
+    left_y += len(KEY_GUIDE) + 2
+
+    canvas.put(left_x, left_y, "BARRAS", fg=theme.CYAN, bold=True)
+    left_y += 1
+    bar_symbols = "█" if not ascii_mode else theme.ASCII_BAR_FILLED
+    empty_symbol = "░" if not ascii_mode else theme.ASCII_BAR_EMPTY
+    canvas.put(left_x, left_y, f"{bar_symbols} lleno · {empty_symbol} vacío", fg=theme.WHITE)
+    left_y += 2
+
+    canvas.put(left_x, left_y, "MENTE", fg=theme.CYAN, bold=True)
+    left_y += 1
+    canvas.put(
+        left_x,
+        left_y,
+        "El pensamiento y el plan son datos del agente; si no reporta, se muestra sin reporte.",
+        fg=theme.WHITE,
+    )
+    left_y += 2
+
+    canvas.put(left_x, left_y, "CONFIRMACIÓN", fg=theme.CYAN, bold=True)
+    left_y += 1
+    canvas.put(left_x, left_y, "Q y R piden una segunda pulsación; ESC cancela.", fg=theme.WHITE)
+    left_y += 2
+
+    canvas.put(left_x, left_y, "MODO ASCII", fg=theme.CYAN, bold=True)
+    left_y += 1
+    canvas.put(left_x, left_y, "A alterna glifos y barras ASCII.", fg=theme.WHITE)
+
+    canvas.put(right_x, 3, "GLIFOS", fg=theme.CYAN, bold=True)
+    glyph_y = 4
+    for tile in TileType:
+        glyph = theme.tile_glyph(tile, ascii_mode=ascii_mode)
+        label = theme.TILE_LABELS[tile]
+        canvas.put(right_x, glyph_y, f"{glyph} {label}", fg=theme.WHITE)
+        glyph_y += 1
+
+    glyph_y += 1
+    canvas.put(right_x, glyph_y, "ESTADOS", fg=theme.CYAN, bold=True)
+    glyph_y += 1
+    for tag, description in STATUS_GUIDE:
+        canvas.put(right_x, glyph_y, f"{tag:<8} {description}", fg=theme.WHITE)
+        glyph_y += 1
+
+    footer = HELP_FOOTER.replace("│", theme.ASCII_VERTICAL if ascii_mode else "│")
+    canvas.fill(0, BOTTOM_BAR_Y, SCREEN_WIDTH, 1, fg=theme.BAR_FG, bg=theme.BAR_BG)
+    canvas.put(0, BOTTOM_BAR_Y, footer, fg=theme.BAR_FG, bg=theme.BAR_BG, bold=True)
     return canvas.to_screen()
 
 
@@ -190,6 +268,7 @@ def _render_map(
     canvas: _Canvas,
     state: SessionState,
     selected_agent_id: AgentId | None,
+    ascii_mode: bool,
 ) -> None:
     for y in range(MAP_HEIGHT):
         for x in range(MAP_WIDTH):
@@ -199,7 +278,7 @@ def _render_map(
             canvas.put(
                 x,
                 y,
-                theme.TILE_GLYPHS[tile],
+                theme.tile_glyph(tile, ascii_mode=ascii_mode),
                 fg=theme.TILE_COLORS[tile],
                 bg=theme.TILE_BACKGROUNDS[tile],
             )
@@ -212,17 +291,23 @@ def _render_map(
         canvas.put(
             agent.position.x,
             agent.position.y,
-            _agent_glyph(agent),
+            _agent_glyph(agent, ascii_mode),
             fg=theme.AGENT_COLOR,
             bg=theme.SELECTED_BG if selected else theme.TILE_BACKGROUNDS[tile],
             bold=selected,
         )
 
 
-def _render_ticker(canvas: _Canvas, events: Sequence[str]) -> None:
-    canvas.hline(0, TICKER_Y, MAP_WIDTH)
+def _render_ticker(canvas: _Canvas, events: Sequence[str], ascii_mode: bool) -> None:
+    canvas.hline(
+        0,
+        TICKER_Y,
+        MAP_WIDTH,
+        char=theme.ASCII_HORIZONTAL if ascii_mode else "─",
+    )
     canvas.put(1, TICKER_Y + 1, "EVENTOS", fg=theme.CYAN, bg=theme.BLACK, bold=True)
-    lines = list(events)[-2:] if events else ["— sin eventos —"]
+    empty_events = ["- sin eventos -"] if ascii_mode else ["— sin eventos —"]
+    lines = list(events)[-2:] if events else empty_events
     for offset, line in enumerate(lines):
         canvas.put(1, TICKER_Y + 2 + offset, line, fg=theme.WHITE, bg=theme.BLACK)
 
@@ -237,6 +322,7 @@ def _render_panel(
     paused: bool,
     speed: int,
     capacity: int,
+    ascii_mode: bool,
 ) -> None:
     canvas.fill(
         PANEL_X,
@@ -246,8 +332,10 @@ def _render_panel(
         fg=theme.WHITE,
         bg=theme.PANEL_BG,
     )
+    vertical = theme.ASCII_VERTICAL if ascii_mode else "│"
+    separator = (theme.ASCII_HORIZONTAL if ascii_mode else "─") * PANEL_CONTENT_WIDTH
     for y in range(BOTTOM_BAR_Y):
-        canvas.put(PANEL_X, y, "│", fg=theme.DIM, bg=theme.PANEL_BG)
+        canvas.put(PANEL_X, y, vertical, fg=theme.DIM, bg=theme.PANEL_BG)
 
     clock = SimulationClock(state.tick_minutes)
     clock.advance(state.tick)
@@ -267,7 +355,7 @@ def _render_panel(
         f"AGENTES {len(state.agents)}/{capacity}",
         fg=theme.CYAN,
     )
-    _panel(canvas, 2, "─" * PANEL_CONTENT_WIDTH, fg=theme.DIM)
+    _panel(canvas, 2, separator, fg=theme.DIM)
     _panel(canvas, 3, "AGENTES", fg=theme.CYAN, bold=True)
 
     agents = list(state.agents)[:capacity]
@@ -279,7 +367,7 @@ def _render_panel(
         _panel(
             canvas,
             y,
-            _agent_line(index, agent, name),
+            _agent_line(index, agent, name, ascii_mode),
             fg=theme.WHITE,
             bg=theme.SELECTED_BG if is_selected else theme.PANEL_BG,
             bold=is_selected,
@@ -290,7 +378,7 @@ def _render_panel(
         y += 1
 
     y += 1
-    _panel(canvas, y, "─" * PANEL_CONTENT_WIDTH, fg=theme.DIM)
+    _panel(canvas, y, separator, fg=theme.DIM)
     y += 1
     if selected is None:
         _panel(canvas, y, "— sin agente seleccionado —", fg=theme.DIM)
@@ -300,7 +388,7 @@ def _render_panel(
     _panel(
         canvas,
         y,
-        f"AGENTE SELECCIONADO · {selected_name} · {_agent_glyph(selected)} · "
+        f"AGENTE SELECCIONADO · {selected_name} · {_agent_glyph(selected, ascii_mode)} · "
         f"({selected.position.x}, {selected.position.y})",
         fg=theme.CYAN,
         bold=True,
@@ -308,22 +396,42 @@ def _render_panel(
     y += 1
     attributes = selected.attributes
     inventory = selected.inventory
-    _panel(canvas, y, f"Salud   {_bar(attributes.health, 100)} {attributes.health:>3.0f}")
+    _panel(
+        canvas,
+        y,
+        f"Salud   {_bar(attributes.health, 100, ascii_mode)} {attributes.health:>3.0f}",
+    )
     y += 1
-    _panel(canvas, y, f"Hambre  {_bar(attributes.hunger, 100)} {attributes.hunger:>3.0f}")
+    _panel(
+        canvas,
+        y,
+        f"Hambre  {_bar(attributes.hunger, 100, ascii_mode)} {attributes.hunger:>3.0f}",
+    )
     y += 1
-    _panel(canvas, y, f"Sed     {_bar(attributes.thirst, 100)} {attributes.thirst:>3.0f}")
+    _panel(
+        canvas,
+        y,
+        f"Sed     {_bar(attributes.thirst, 100, ascii_mode)} {attributes.thirst:>3.0f}",
+    )
     y += 1
-    _panel(canvas, y, f"Energía {_bar(attributes.energy, 100)} {attributes.energy:>3.0f}")
+    _panel(
+        canvas,
+        y,
+        f"Energía {_bar(attributes.energy, 100, ascii_mode)} {attributes.energy:>3.0f}",
+    )
     y += 1
     temperature = attributes.body_temperature_c
     _panel(
         canvas,
         y,
-        f"Temp    {_bar((temperature - 34.0) / 8.0 * 100, 100)} {temperature:>4.1f} °C",
+        f"Temp    {_bar((temperature - 34.0) / 8.0 * 100, 100, ascii_mode)} {temperature:>4.1f} °C",
     )
     y += 1
-    _panel(canvas, y, f"Mojado  {_bar(attributes.wetness, 100)} {attributes.wetness:>3.0f}")
+    _panel(
+        canvas,
+        y,
+        f"Mojado  {_bar(attributes.wetness, 100, ascii_mode)} {attributes.wetness:>3.0f}",
+    )
     y += 1
     _panel(
         canvas,
@@ -344,14 +452,14 @@ def _render_panel(
     y += 1
 
     y += 1
-    _panel(canvas, y, "─" * PANEL_CONTENT_WIDTH, fg=theme.DIM)
+    _panel(canvas, y, separator, fg=theme.DIM)
     y += 1
     _panel(canvas, y, "MENTE (REPORTADO)", fg=theme.CYAN, bold=True)
     y += 1
     _panel(canvas, y, "— sin reporte —", fg=theme.DIM)
     y += 2
 
-    _panel(canvas, y, "─" * PANEL_CONTENT_WIDTH, fg=theme.DIM)
+    _panel(canvas, y, separator, fg=theme.DIM)
     y += 1
     _panel(canvas, y, "ENTORNO", fg=theme.CYAN, bold=True)
     y += 1
@@ -363,7 +471,7 @@ def _render_panel(
     _panel(canvas, y, f"Fuegos: {fires} · Refugios: {shelters} · Cadáveres: {corpses}")
     y += 2
 
-    _panel(canvas, y, "─" * PANEL_CONTENT_WIDTH, fg=theme.DIM)
+    _panel(canvas, y, separator, fg=theme.DIM)
     y += 1
     _panel(canvas, y, "EVENTOS", fg=theme.CYAN, bold=True)
     y += 1
@@ -373,7 +481,7 @@ def _render_panel(
         y += 1
     y += 1
 
-    _panel(canvas, y, "─" * PANEL_CONTENT_WIDTH, fg=theme.DIM)
+    _panel(canvas, y, separator, fg=theme.DIM)
     y += 1
     _panel(canvas, y, "INVENTARIO", fg=theme.CYAN, bold=True)
     y += 1
@@ -383,8 +491,9 @@ def _render_panel(
         y += 1
 
 
-def _render_bottom_bar(canvas: _Canvas) -> None:
-    text = (BOTTOM_BAR + " " * SCREEN_WIDTH)[:SCREEN_WIDTH]
+def _render_bottom_bar(canvas: _Canvas, ascii_mode: bool) -> None:
+    bar = BOTTOM_BAR.replace("│", theme.ASCII_VERTICAL) if ascii_mode else BOTTOM_BAR
+    text = (bar + " " * SCREEN_WIDTH)[:SCREEN_WIDTH]
     canvas.put(0, BOTTOM_BAR_Y, text, fg=theme.BAR_FG, bg=theme.BAR_BG, bold=True)
 
 
@@ -420,23 +529,24 @@ def _resolve_selected(
     return state.agents[0] if state.agents else None
 
 
-def _agent_glyph(agent: Agent) -> str:
+def _agent_glyph(agent: Agent, ascii_mode: bool = False) -> str:
     if agent.status is AgentStatus.DEAD:
-        return "☠"
+        return "x" if ascii_mode else "☠"
     if agent.status is AgentStatus.ABSENT:
-        return "…"
+        return "?" if ascii_mode else "…"
     if agent.status is AgentStatus.SLEEPING:
         return "z"
     return "@"
 
 
-def _agent_line(index: int, agent: Agent, name: str) -> str:
+def _agent_line(index: int, agent: Agent, name: str, ascii_mode: bool = False) -> str:
     if agent.status is AgentStatus.DEAD:
-        return f"{index:>1} ☠ {name:<8} — muerta"
+        return f"{index:>1} {_agent_glyph(agent, ascii_mode)} {name:<8} — muerta"
     attributes = agent.attributes
+    health_symbol = "H" if ascii_mode else "♥"
     return (
-        f"{index:>1} {_agent_glyph(agent)} {name:<8} "
-        f"♥{attributes.health:>3.0f} H{attributes.hunger:>3.0f} "
+        f"{index:>1} {_agent_glyph(agent, ascii_mode)} {name:<8} "
+        f"{health_symbol}{attributes.health:>3.0f} H{attributes.hunger:>3.0f} "
         f"S{attributes.thirst:>3.0f} E{attributes.energy:>3.0f}"
     )
 
@@ -461,10 +571,12 @@ def _status_tags(agent: Agent) -> list[str]:
     return tags
 
 
-def _bar(value: float, maximum: float) -> str:
+def _bar(value: float, maximum: float, ascii_mode: bool = False) -> str:
     ratio = 0.0 if maximum <= 0 else value / maximum
     filled = max(0, min(10, round(ratio * 10)))
-    return "█" * filled + "░" * (10 - filled)
+    fill_char = theme.ASCII_BAR_FILLED if ascii_mode else "█"
+    empty_char = theme.ASCII_BAR_EMPTY if ascii_mode else "░"
+    return fill_char * filled + empty_char * (10 - filled)
 
 
 def _hex(color: theme.RGB) -> str:

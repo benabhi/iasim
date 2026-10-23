@@ -6,11 +6,12 @@ import hashlib
 import unittest
 
 from iasim.domain.agents import Agent
+from iasim.domain.geometry import Position
 from iasim.domain.identifiers import AgentId
 from iasim.domain.session import SessionState
 from iasim.domain.tiles import TileType
 from iasim.ui import theme
-from iasim.ui.layout import render_base_screen
+from iasim.ui.layout import render_base_screen, render_help_screen
 from iasim.world.generation import generate_layout
 
 LAYOUT = generate_layout(42, agent_count=3)
@@ -114,6 +115,60 @@ class BaseLayoutTests(unittest.TestCase):
         self.assertEqual(set(theme.TILE_GLYPHS), set(TileType))
         self.assertEqual(set(theme.TILE_COLORS), set(TileType))
         self.assertEqual(set(theme.TILE_BACKGROUNDS), set(TileType))
+        self.assertEqual(set(theme.ASCII_TILE_GLYPHS), set(TileType))
+        self.assertEqual(set(theme.TILE_LABELS), set(TileType))
+
+    def test_help_screen_lists_controls_glyphs_and_statuses(self) -> None:
+        screen = render_help_screen()
+        text = screen.to_text()
+
+        self.assertEqual(screen.width, 160)
+        self.assertEqual(screen.height, 45)
+        for expected in (
+            "AYUDA Y LEYENDA",
+            "ESPACIO",
+            "TAB",
+            "F1",
+            "Q",
+            "R",
+            "GLIFOS",
+            "ESTADOS",
+            "BARRAS",
+        ):
+            self.assertIn(expected, text)
+        self.assertIn("mesa de trabajo", text)
+        self.assertIn("HAMBRE", text)
+
+    def test_ascii_help_uses_ascii_legend_glyphs(self) -> None:
+        text = render_help_screen(ascii_mode=True).to_text()
+
+        self.assertIn("# lleno", text)
+        self.assertIn("T árbol", text)
+        self.assertNotIn("♣", text)
+
+    def test_ascii_fallback_changes_map_and_bar_glyphs(self) -> None:
+        state = _state()
+        screen = render_base_screen(
+            state,
+            NAMES,
+            selected_agent_id=AgentId("ag_01"),
+            ascii_mode=True,
+        )
+        map_chars = {
+            screen.cell_at(x, y).char
+            for y in range(40)
+            for x in range(80)
+            if state.world.tile_at(Position(x, y)) not in (TileType.DEEP_WATER,)
+        }
+        panel_text = "\n".join(screen.row_text(y)[80:] for y in range(45))
+        bottom = screen.row_text(44)
+
+        self.assertTrue(map_chars <= set(theme.ASCII_TILE_GLYPHS.values()) | {"@"})
+        self.assertIn("|", bottom)
+        self.assertNotIn("│", bottom)
+        self.assertIn("#", panel_text)
+        self.assertNotIn("█", panel_text)
+        self.assertNotIn("░", panel_text)
 
     def test_html_preview_contains_screen_and_legend(self) -> None:
         preview = _screen().to_html("IASim test")

@@ -39,6 +39,37 @@ TILE_GLYPHS: dict[TileType, str] = {
     TileType.GROUND_ITEM: "!",
 }
 
+ASCII_TILE_GLYPHS: dict[TileType, str] = {
+    TileType.DEEP_WATER: "~",
+    TileType.SHALLOW_WATER: "~",
+    TileType.FRESH_WATER: "~",
+    TileType.SAND: ".",
+    TileType.GRASS: ",",
+    TileType.TALL_GRASS: '"',
+    TileType.TREE: "T",
+    TileType.PALM: "P",
+    TileType.BUSH: "b",
+    TileType.ROCK: "^",
+    TileType.ROCKY_GROUND: ":",
+    TileType.CLAY: "c",
+    TileType.WORKBENCH: "=",
+    TileType.SHELTER: "n",
+    TileType.FIRE: "*",
+    TileType.CORPSE: "x",
+    TileType.GROUND_ITEM: "!",
+}
+
+ASCII_BAR_FILLED = "#"
+ASCII_BAR_EMPTY = "-"
+ASCII_VERTICAL = "|"
+ASCII_HORIZONTAL = "-"
+
+
+def tile_glyph(tile: TileType, *, ascii_mode: bool = False) -> str:
+    """Return the map glyph for a tile, using the ASCII fallback when requested."""
+    return ASCII_TILE_GLYPHS[tile] if ascii_mode else TILE_GLYPHS[tile]
+
+
 TILE_COLORS: dict[TileType, RGB] = {
     TileType.DEEP_WATER: (70, 110, 180),
     TileType.SHALLOW_WATER: (90, 150, 220),
@@ -92,4 +123,9 @@ TILE_LABELS: dict[TileType, str] = {
     TileType.ROCK: "roca",
     TileType.ROCKY_GROUND: "suelo rocoso",
     TileType.CLAY: "arcilla",
+    TileType.WORKBENCH: "mesa de trabajo",
+    TileType.SHELTER: "refugio",
+    TileType.FIRE: "fuego",
+    TileType.CORPSE: "cadáver",
+    TileType.GROUND_ITEM: "objeto",
 }
