@@ -811,7 +811,7 @@ El mockup es conceptual: en la implementación el mapa ocupa exactamente 80 × 4
 
 ### 5.3 Panel derecho
 
-El panel derecho debe priorizar la lectura rápida. Se organiza en secciones separadas por líneas:
+El panel derecho debe priorizar la lectura rápida. La pestaña `RESUMEN` agrupa las secciones de lectura rápida; las pestañas de detalle amplían eventos, mente y vínculos. El contenido base se organiza en secciones separadas por líneas:
 
 1. **Encabezado de sesión**
    - Día, hora y fase.
@@ -825,6 +825,7 @@ El panel derecho debe priorizar la lectura rápida. Se organiza en secciones sep
    - El seleccionado se resalta.
    - Los muertos muestran `☠` y causa; los ausentes muestran `…`.
    - Los timeouts se indican con un contador.
+   - La tabla compacta vive en `RESUMEN`; en las demás pestañas se mantiene una franja compacta con todos los agentes.
 
 3. **Agente seleccionado**
    - Nombre, posición, arma equipada y estado general.
@@ -833,15 +834,17 @@ El panel derecho debe priorizar la lectura rápida. Se organiza en secciones sep
    - Fuerza, destreza, resistencia y visión efectiva.
    - Capacidad de carga usada/total.
    - Inventario resumido y equipo.
+   - El inventario completo y el equipo están en `VÍNCULOS` y en `F2`.
 
 4. **Mente (reportado)**
    - Intención actual.
-   - Pensamiento más reciente (máximo 3 líneas en la vista base).
+   - Pensamiento más reciente (máximo 3 líneas en `RESUMEN`; completo en `MENTE`).
    - Plan declarado.
    - Última acción y su resultado.
    - Próximo paso reportado.
    - Si no hay reporte: `— sin reporte —`.
    - Etiqueta visible: `REPORTADO POR EL AGENTE`.
+   - La vista completa y el historial están en `MENTE` y en `F2`.
 
 5. **Entorno**
    - Día/hora/fase.
@@ -854,20 +857,57 @@ El panel derecho debe priorizar la lectura rápida. Se organiza en secciones sep
    - Ofertas de intercambio pendientes.
    - Últimos mensajes enviados/recibidos.
    - Traiciones registradas.
+   - La vista completa está en `VÍNCULOS` y en `F2`.
 
 7. **Eventos**
    - Últimos 4–6 eventos globales.
-   - Color por tipo; el detalle completo está en `F4`.
+   - Color por tipo; el historial completo y los filtros están en `EVENTOS` y en `F4`.
 
-El panel debe adaptarse dinámicamente: si hay un solo agente, la ficha y la mente reciben más espacio; si hay ocho, la lista se compacta y el detalle se consulta en `F2`.
+El panel debe adaptarse dinámicamente: si hay un solo agente, la ficha y el inventario reciben más espacio; si hay ocho, la lista se compacta y el detalle se consulta en `F2`.
+
+#### 5.3.1 Pestañas del panel derecho
+
+El panel conserva un encabezado global con día, hora, fase, clima, temperatura, viento, visibilidad y conteo de agentes. Debajo hay una barra de pestañas de una línea:
+
+`◇ RESUMEN   EVENTOS   MENTE   VÍNCULOS`
+
+La pestaña activa se marca con `◇`/`▸`, etiqueta y color; nunca solo con color. La barra puede mostrar contadores (`EVENTOS 142`, `MENTE 18`) para indicar profundidad sin abrir la pestaña.
+
+- **RESUMEN (por defecto):** tabla compacta de todos los agentes, ficha del agente seleccionado, resumen de mente (máximo 3 líneas), entorno y últimos 3–4 eventos. Usa todo el alto disponible y se adapta: con un agente expande ficha, inventario y eventos; con ocho compacta la tabla y limita la mente a 2–3 líneas.
+- **EVENTOS:** historial global a altura completa con scroll, hora, tipo y mensaje. Permite alternar entre global y agente seleccionado; el detalle completo con filtros y búsqueda sigue en `F4`.
+- **MENTE:** intención, pensamiento completo con wrapping, plan, última acción, próximo paso e historial de reportes anteriores con scroll. El detalle completo sigue en `F2`.
+- **VÍNCULOS:** inventario y equipo en dos columnas, alianzas, ofertas de intercambio y mensajes recientes con scroll. El detalle completo sigue en `F2`.
+
+En las pestañas distintas de `RESUMEN` se mantiene una franja compacta con todos los agentes (`1@Nia♥92  2@Kai♥71 …`), de modo que RF-1102 se cumple siempre. El encabezado global muestra el estado del mundo.
+
+Reglas de interacción:
+
+- `[` / `]`: pestaña anterior / siguiente.
+- `↑` / `↓`: desplazar una fila la lista activa.
+- `PgUp` / `PgDn`: desplazar una página.
+- `Inicio` / `Fin`: ir al inicio / final de la lista.
+- `Esc`: volver a `RESUMEN` desde una pestaña; si hay un overlay o cursor activo, conserva su comportamiento de cierre.
+- `F2`, `F4` y `F6` siguen abriendo las vistas completas de agente, eventos y mapa.
+- Si el cursor de inspección del mapa está activo, las flechas mueven el cursor y no la lista.
+
+Reglas de desborde:
+
+- La vista base nunca renderiza listas ilimitadas: trunca con `…`, muestra `+N` y delega el resto a la pestaña correspondiente.
+- `EVENTOS`, `MENTE` y `VÍNCULOS` ocupan el alto completo del panel y tienen scroll con indicador de posición.
+- Los textos largos se truncan por ancho en la vista base; el wrapping completo se reserva para `MENTE` y las vistas full-screen.
+- El orden es estable por tick y secuencia.
+
+Las pestañas son estado de presentación: no alteran la simulación ni su determinismo. `Espacio` sigue pausando. Los overlays `F1`–`F8` pausan según §5.9. La barra inferior es contextual y sigue siendo una sola línea de 160 columnas.
 
 ### 5.4 Barra inferior persistente
 
 La barra inferior está siempre visible. En la vista base muestra los atajos principales:
 
 ```text
-[ESPACIO] Pausa │ [1-8/TAB] Agente │ [+/-] Vel │ [F1] Ayuda │ [F2] Agente │ [F3] Mundo │ [F4] Log │ [F5] Replay │ [F6] Mapa │ [F9] Guardar │ [Q] Salir
+[ESPACIO] Pausa│[1-8/TAB] Agente│[+/-] Vel│[ / ] Pestaña│[F1] Ayuda│[F2] Agente│[F3] Mundo│[F4] Log│[F5] Replay│[F6] Mapa│[F9] Guardar│[Q] Salir
 ```
+
+En la vista base, la barra incluye `[ / ] Pestaña`; en `EVENTOS`, `MENTE` y `VÍNCULOS` agrega `[↑/↓] Scroll` y `[PgUp/PgDn] Página`. Los separadores pueden compactarse para no exceder 160 columnas.
 
 En cada vista a pantalla completa la barra cambia de contexto, pero mantiene el mismo estilo y posición:
 
@@ -887,6 +927,10 @@ En cada vista a pantalla completa la barra cambia de contexto, pero mantiene el 
 | `1`–`8` | Seleccionar agente por número. |
 | `0` | Vista de todos los agentes / deseleccionar. |
 | `Tab` / `Shift+Tab` | Siguiente / anterior agente vivo. |
+| `[` / `]` | Pestaña anterior / siguiente del panel derecho. |
+| `↑` / `↓` | Desplazar una fila la lista de la pestaña activa; con el cursor de inspección activo, mueve el cursor. |
+| `PgUp` / `PgDn` | Desplazar una página la lista de la pestaña activa. |
+| `Inicio` / `Fin` | Ir al inicio / final de la lista de la pestaña activa. |
 | `F1` | Ayuda, atajos, glifos y significados de estados. |
 | `F2` | Ficha completa del agente seleccionado. |
 | `F3` | Vista completa del mundo y todos los agentes. |
@@ -899,9 +943,11 @@ En cada vista a pantalla completa la barra cambia de contexto, pero mantiene el 
 | `F10` | Cargar sesión. |
 | `F11` | Alternar pantalla completa del sistema. |
 | `F12` | Abrir la consola de debug del operador. |
-| `Esc` | Cerrar overlay, cancelar cursor o volver a la vista base. |
+| `Esc` | Cerrar overlay, cancelar cursor, volver a la vista base o volver a `RESUMEN` desde una pestaña. |
 | `Q` | Salir; pide confirmación si hay una sesión en curso. |
 | `R` | Reiniciar sesión nueva; solo en la pantalla de fin. |
+
+Las flechas, `PgUp`/`PgDn` e `Inicio`/`Fin` controlan la pestaña activa del panel solo cuando el cursor de inspección del mapa no está activo.
 
 #### 5.5.2 Mapa y capas
 
