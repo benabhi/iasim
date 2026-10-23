@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from hashlib import blake2b
 
-_MASK64 = (1 << 64) - 1
+U64_MASK = (1 << 64) - 1
 _GOLDEN_GAMMA = 0x9E3779B97F4A7C15
 _MIX_A = 0xBF58476D1CE4E5B9
 _MIX_B = 0x94D049BB133111EB
@@ -17,16 +17,16 @@ _MIX_B = 0x94D049BB133111EB
 
 def _mix64(value: int) -> int:
     """Return the SplitMix64 finalizer applied to a 64-bit integer."""
-    value &= _MASK64
-    value = ((value ^ (value >> 30)) * _MIX_A) & _MASK64
-    value = ((value ^ (value >> 27)) * _MIX_B) & _MASK64
+    value &= U64_MASK
+    value = ((value ^ (value >> 30)) * _MIX_A) & U64_MASK
+    value = ((value ^ (value >> 27)) * _MIX_B) & U64_MASK
     return value ^ (value >> 31)
 
 
 def _agent_key(agent: str | int) -> int:
     """Map an agent identifier to a stable 64-bit integer."""
     if isinstance(agent, int):
-        return agent & _MASK64
+        return agent & U64_MASK
     return int.from_bytes(blake2b(agent.encode("utf-8"), digest_size=8).digest(), "big")
 
 
@@ -34,7 +34,7 @@ class DeterministicRng:
     """Seeded SplitMix64 stream with platform-independent output."""
 
     def __init__(self, seed: int) -> None:
-        self._state = seed & _MASK64
+        self._state = seed & U64_MASK
 
     @property
     def state(self) -> int:
@@ -48,7 +48,7 @@ class DeterministicRng:
 
     def next_u64(self) -> int:
         """Advance the stream and return the next unsigned 64-bit value."""
-        self._state = (self._state + _GOLDEN_GAMMA) & _MASK64
+        self._state = (self._state + _GOLDEN_GAMMA) & U64_MASK
         return _mix64(self._state)
 
     def randint(self, low: int, high: int) -> int:
