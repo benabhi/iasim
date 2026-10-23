@@ -1234,6 +1234,7 @@ Todas las acciones principales aceptan `tick`, `request_id?` y `reason?` (≤ 28
 #### 6.3.3 Reglas de las tools
 
 - Una acción principal por tick; `iasim_say` y `iasim_report_mind` son gratuitas.
+- `iasim_report_mind` acepta un reporte por tick, lo sanea, lo escribe en `thoughts.jsonl` y solo lo expone al operador.
 - Las tools de información no consumen acción, pero están limitadas por tasa.
 - `iasim_report_usage` es gratuito y acumulativo por agente; agrupa por modelo y esfuerzo, y se descarta al desconectarse el agente.
 - El `tick` de uso puede ser el actual o uno anterior, para tolerar latencia del modelo; un tick futuro se rechaza.
@@ -1398,6 +1399,8 @@ Las tools devuelven un resultado estructurado. Los errores de validación se dev
 | `MESSAGE_TOO_LONG` | Texto excede el límite. |
 | `INVALID_MESSAGE` | El mensaje queda vacío después de sanearlo. |
 | `ALREADY_SAID` | El agente ya envió su mensaje local en este tick. |
+| `INVALID_MIND_REPORT` | Reporte de mente vacío, mal tipado o con confianza inválida. |
+| `ALREADY_REPORTED` | El agente ya envió su reporte de mente en este tick. |
 | `INVALID_USAGE` | Reporte de uso inválido: modelo, esfuerzo, tokens o costo fuera de rango. |
 | `NO_NEW_TICK` | `wait_for_tick` venció sin tick nuevo. |
 | `INTERNAL_ERROR` | Error inesperado; el servidor sigue operativo. |

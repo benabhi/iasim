@@ -41,6 +41,7 @@ TOOL_NAMES = {
     "iasim_craft",
     "iasim_build",
     "iasim_say",
+    "iasim_report_mind",
     "iasim_report_usage",
     "iasim_wait_for_tick",
 }
@@ -156,6 +157,34 @@ class McpServerTests(unittest.TestCase):
                             )
                         )
                         self.assertEqual(duplicate_say["error"]["code"], "ALREADY_SAID")
+
+                        mind = _data(
+                            await client.call_tool(
+                                "iasim_report_mind",
+                                {
+                                    "tick": 0,
+                                    "intent": "Explorar",
+                                    "thought": "Veo el borde del mapa.",
+                                    "plan": "Caminar al este",
+                                    "confidence": 60,
+                                },
+                            )
+                        )
+                        self.assertTrue(mind["ok"])
+                        duplicate_mind = _data(
+                            await client.call_tool(
+                                "iasim_report_mind",
+                                {
+                                    "tick": 0,
+                                    "intent": "Otra vez",
+                                    "thought": "Duplicado",
+                                },
+                            )
+                        )
+                        self.assertEqual(
+                            duplicate_mind["error"]["code"],
+                            "ALREADY_REPORTED",
+                        )
 
                         reported = _data(
                             await client.call_tool(
