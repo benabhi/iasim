@@ -67,7 +67,7 @@ El sistema incluye:
 | Snapshot | Copia completa del estado de simulación en un tick, usada para guardado y búsqueda en replay. |
 | Estación | Estructura requerida para ciertas recetas (por ejemplo, mesa de trabajo). |
 | Bioma | Conjunto de celdas con terreno, recursos y clima característicos. En el MVP: isla boscosa con río. |
-| Estado ausente | Agente que superó el límite de timeouts; permanece en el mundo pero no participa del turno hasta reconectarse. |
+| Estado ausente | Agente conectado que superó el límite de timeouts; permanece en el mundo pero no participa del turno hasta que vuelva a responder. Si la conexión se cierra, se retira del mundo. |
 
 ### 1.5 Referencias
 
@@ -218,10 +218,12 @@ Componentes internos:
 
 Reglas adicionales:
 
-- Un agente que no responde pierde el turno (`skip`). Tras **3 timeouts consecutivos** pasa a estado `ausente`: sigue en el mundo, puede ser atacado o saqueado, pero no bloquea el turno.
-- Un agente ausente puede reconectarse con su mismo token y reanudar su participación si sigue vivo.
-- Si no hay agentes activos (todos muertos o ausentes), la simulación se pausa y muestra el estado de espera.
-- Un agente que se conecta durante el lobby elige un punto de aparición. Las incorporaciones tardías están deshabilitadas por defecto y son configurables.
+- El servidor y la isla existen desde el arranque, sin lobby ni cuenta regresiva. Los agentes se conectan y desconectan durante la vida del servidor; el máximo de agentes concurrentes es configurable (1–8).
+- Un agente existe en el mundo solo mientras su conexión MCP está abierta. Al desconectarse, se retira del mundo, se cancela su acción pendiente y su inventario cae al suelo en su posición. El slot y su token quedan libres para una conexión nueva; no se reanuda el estado del agente anterior.
+- La muerte es permanente y deja un cadáver saqueable. Un agente muerto deja de actuar aunque su conexión siga abierta; si luego se desconecta, el cadáver permanece hasta que el operador finalice la sesión.
+- Un agente que no responde pierde el turno (`skip`). Tras **3 timeouts consecutivos** pasa a estado `ausente` mientras siga conectado: no bloquea el turno, pero puede ser atacado o saqueado. Si la conexión se cierra, se aplica la regla de desconexión.
+- Si no hay agentes conectados (o ningún agente activo), la simulación se pausa y la GUI muestra `ESPERANDO AGENTES`. El servidor y la GUI siguen abiertos para nuevas conexiones.
+- Un agente puede conectarse en cualquier momento entre ticks; el servidor lo incorpora al siguiente tick con un punto de aparición libre. No hay restricciones de incorporación tardía por lobby.
 - Un agente que duerme (`sleep`) no bloquea el turno: el servidor lo considera en espera automática hasta que despierte o sea interrumpido.
 - La pausa del operador detiene el reloj y los plazos; los agentes no reciben nuevos ticks.
 - La velocidad de UI solo cambia la cadencia de presentación, no las reglas ni la simulación headless.
@@ -496,18 +498,19 @@ energia  -= 0.25 × factor_actividad
   - deja un cadáver `☠` con todo su inventario;
   - el cadáver es saqueable con `loot`;
   - la causa y el autor se registran.
-- La sesión termina cuando no queda ningún agente vivo. El operador puede iniciar una sesión nueva.
+- Cuando no queda ningún agente vivo, la simulación se pausa y la GUI muestra el estado de espera. El servidor sigue abierto y el operador decide cuándo terminar o iniciar un mundo nuevo.
 - No hay fauna hostil en el MVP; el combate es entre agentes. En fase 2 se agrega fauna pasiva y pesca como fuentes de alimento; los depredadores complejos quedan fuera de alcance.
 
-### 3.11 Sesión y fin de partida
+### 3.11 Sesión y servidor abierto
 
-- Lobby: el servidor MCP se inicia y espera a que se registren los agentes configurados (mínimo 1).
-- Al alcanzar el mínimo, se muestra una cuenta regresiva de 5 segundos y comienza el tick 0.
-- El operador puede pausar, cambiar velocidad, guardar, abrir vistas y finalizar.
-- Fin normal: todos los agentes muertos, o el operador finaliza la sesión.
-- Al finalizar se muestra un resumen con métricas, causa de muerte y hash final.
-- `R` en la pantalla de fin inicia una sesión nueva con la misma configuración y una seed nueva o la indicada.
-- Guardar/cargar permite continuar una sesión; los agentes muertos siguen muertos.
+- El comando de arranque genera el mundo, abre la GUI del operador y levanta el servidor MCP. La isla y la GUI son visibles desde el inicio, aunque no haya agentes.
+- No hay lobby, mínimo obligatorio ni cuenta regresiva. El operador configura el máximo de agentes concurrentes (1–8); los agentes pueden conectarse y desconectarse mientras el servidor esté vivo.
+- El tick 0 es el estado inicial del mundo. La simulación no avanza mientras no haya agentes conectados o activos; al entrar un agente, la GUI lo muestra y el reloj continúa.
+- El operador puede pausar, cambiar velocidad, guardar, abrir vistas y finalizar el servidor. La GUI es la vista del operador: muestra el mundo completo y a todos los agentes conectados; los agentes siguen recibiendo solo su percepción.
+- El fin normal es una acción explícita del operador (o el cierre del proceso). La muerte del último agente no finaliza el servidor: deja el cadáver, pausa la simulación y muestra el estado de espera; una conexión nueva puede entrar si hay un slot libre.
+- Al finalizar se escribe un resumen con métricas, causas de muerte y hash final, y se conservan los logs de la sesión.
+- `R`/reinicio, si está disponible en la GUI, inicia un mundo nuevo con la misma configuración y una seed nueva o la indicada. También se puede reiniciar el proceso.
+- Guardar/cargar permite continuar una sesión; los agentes muertos siguen muertos y los desconectados no se restauran como presentes.
 
 ---
 
@@ -527,13 +530,16 @@ Leyenda de prioridad:
 | RF-101 | El sistema debe cargar configuración desde TOML y permitir sobrescritura por CLI. | M | F0 |
 | RF-102 | El sistema debe iniciar en modo UI (160 × 45) o headless con la misma simulación. | M | F1 |
 | RF-103 | El sistema debe generar el mundo de forma determinista a partir de una seed. | M | F0 |
-| RF-104 | El sistema debe operar un lobby hasta que se registre el mínimo de agentes configurado. | M | F1 |
+| RF-104 | El sistema debe iniciar el mundo, la GUI y el servidor MCP sin esperar un mínimo de agentes, y aceptar conexiones hasta el máximo configurado. | M | F1 |
 | RF-105 | El sistema debe permitir pausar y reanudar la simulación sin perder estado. | M | F1 |
 | RF-106 | El sistema debe permitir ajustar la velocidad de presentación sin alterar las reglas. | M | F1 |
-| RF-107 | El sistema debe finalizar la sesión cuando no queden agentes vivos. | M | F1 |
-| RF-108 | El sistema debe permitir iniciar una sesión nueva desde la pantalla de fin. | M | F1 |
-| RF-109 | El sistema debe permitir incorporaciones tardías solo si la configuración lo habilita. | S | F2 |
+| RF-107 | El sistema debe mantener el servidor y la GUI disponibles cuando no queden agentes conectados o vivos, pausando la simulación hasta una nueva conexión o el cierre del operador. | M | F1 |
+| RF-108 | El sistema debe permitir al operador iniciar un mundo nuevo sin reiniciar necesariamente el proceso. | M | F1 |
+| RF-109 | El sistema debe permitir que los agentes se conecten y desconecten durante la sesión, hasta el máximo configurado. | M | F1 |
 | RF-110 | El sistema debe registrar metadatos de sesión: seed, configuración, versiones y hora de inicio. | M | F1 |
+| RF-111 | El sistema debe permitir exponer el servidor MCP en la LAN mediante configuración explícita, exigiendo token y mostrando la URL y una advertencia de seguridad. | M | F1 |
+| RF-112 | El sistema debe eliminar del mundo a un agente cuando su conexión MCP se cierra, liberar su slot y dejar su inventario en el suelo o su cadáver si murió. | M | F1 |
+| RF-113 | La GUI del operador debe mostrar en vivo a los agentes conectados, su estado y su actividad. | M | F1 |
 
 ### 4.2 Mundo (RF-200)
 
@@ -661,8 +667,8 @@ Leyenda de prioridad:
 
 | ID | Requerimiento | Prioridad | Fase |
 |---|---|---|---|
-| RF-1001 | El servidor MCP debe escuchar en HTTP local (por defecto `127.0.0.1:8765`). | M | F0 |
-| RF-1002 | Cada agente debe autenticarse con un token de sesión único. | M | F1 |
+| RF-1001 | El servidor MCP debe escuchar por HTTP en loopback por defecto (`127.0.0.1:8765`) y permitir LAN solo con configuración explícita. | M | F0 |
+| RF-1002 | Cada slot de agente debe autenticarse con un token Bearer estable mientras el servidor vive; al desconectarse el agente, el token/slot queda libre para una conexión nueva. | M | F1 |
 | RF-1003 | El sistema debe exponer `iasim_join`, `iasim_observe` y `iasim_wait_for_tick`. | M | F1 |
 | RF-1004 | El sistema debe exponer tools para todas las acciones del juego. | M | F1 |
 | RF-1005 | El sistema debe validar y encolar una acción principal por tick. | M | F1 |
@@ -675,7 +681,7 @@ Leyenda de prioridad:
 | RF-1012 | El servidor no debe exponer tools de administración ni acceso al mapa completo. | M | F1 |
 | RF-1013 | El sistema debe registrar todas las llamadas de acción y sus resultados. | M | F1 |
 | RF-1014 | El sistema debe fijar y documentar la versión del protocolo y del esquema. | M | F1 |
-| RF-1015 | Un agente ausente debe poder reconectarse y reanudar si sigue vivo. | S | F1 |
+| RF-1015 | Un agente desconectado debe retirarse del mundo y liberar su slot/token; una conexión nueva puede ocupar ese slot, sin reanudar el estado anterior. | M | F1 |
 
 ### 4.11 Interfaz de usuario (RF-1100)
 
@@ -739,7 +745,7 @@ Leyenda de prioridad:
 | RF-1302 | El proyecto debe incluir un agente de referencia determinista que use MCP. | M | F1 |
 | RF-1303 | El agente de referencia debe reportar intención y pensamiento. | S | F1 |
 | RF-1304 | Debe haber tests unitarios de mundo, necesidades, FOV, crafteo, combate y persistencia. | M | F1 |
-| RF-1305 | Debe haber tests de integración MCP: join, observe, acción, timeout, reconexión. | M | F1 |
+| RF-1305 | Debe haber tests de integración MCP: join, observe, acción, timeout, desconexión y reutilización de slot. | M | F1 |
 | RF-1306 | Debe haber tests de seed dorada y hash de estado. | M | F1 |
 | RF-1307 | Debe haber un test de rendimiento con 8 agentes y 1000 ticks. | S | F1 |
 | RF-1308 | Debe existir un harness de benchmarks multi-seed. | C | F2 |
@@ -817,13 +823,13 @@ El panel derecho debe priorizar la lectura rápida. La pestaña `RESUMEN` agrupa
    - Día, hora y fase.
    - Clima, temperatura, viento y visibilidad.
    - Estado `PAUSA` y velocidad.
-   - Indicador de agentes conectados / vivos / ausentes.
+   - Indicador de agentes conectados / vivos / libres y del estado `ESPERANDO AGENTES`.
 
 2. **Agentes**
    - Una línea por agente (hasta 8).
    - Número de selección, glifo `@`, nombre, salud, hambre, sed, energía y estados.
    - El seleccionado se resalta.
-   - Los muertos muestran `☠` y causa; los ausentes muestran `…`.
+   - Los muertos muestran `☠` y causa; los ausentes conectados muestran `…`; los desconectados se retiran y quedan registrados como evento de conexión.
    - Los timeouts se indican con un contador.
    - La tabla compacta vive en `RESUMEN`; en las demás pestañas se mantiene una franja compacta con todos los agentes.
 
@@ -1138,11 +1144,11 @@ El reporte es **voluntario, no verificado y potencialmente engañoso**. La UI lo
 - Transporte: HTTP *streamable* de MCP.
 - Endpoint por defecto: `http://127.0.0.1:8765/mcp`.
 - Endpoint de salud: `GET http://127.0.0.1:8765/healthz`.
-- Por defecto solo escucha en loopback. Si se configura una interfaz no local, la UI debe mostrar una advertencia.
-- Autenticación: token Bearer por agente, generado al iniciar la sesión y escrito en `run/agents.json` con permisos restringidos.
-- Cada token corresponde a un slot de agente y se consume al hacer `iasim_join`.
-- `--dev-open` permite desactivar auth solo en loopback, para pruebas.
-- Los tokens no se escriben en logs ni en la UI.
+- Por defecto solo escucha en loopback. Para jugar en la misma red, el comando de arranque acepta `--host 0.0.0.0` (o la IP local) de forma explícita; la GUI muestra la URL LAN y una advertencia de exposición.
+- Autenticación: token Bearer por slot de agente, generado al iniciar el servidor y escrito en `agents.json` con permisos restringidos. Cada slot tiene un token estable mientras el servidor vive; al desconectarse el agente, el slot queda libre y el mismo token puede usarse para una conexión nueva. El operador puede rotar tokens reiniciando el servidor.
+- El servidor no arranca en LAN con `--dev-open`; esa opción solo se permite en loopback para pruebas.
+- Los tokens no se escriben en logs ni en la GUI. La GUI solo muestra si un slot está libre, conectado o desconectado.
+- En el MVP el transporte LAN es HTTP sin TLS y debe usarse en una red de confianza. Para redes no confiables se debe usar un túnel/VPN; TLS queda fuera del MVP.
 
 ### 6.2 Ciclo de observación y acción
 
@@ -1168,7 +1174,7 @@ El reporte es **voluntario, no verificado y potencialmente engañoso**. La UI lo
 
 | Tool | Argumentos | Costo | Descripción |
 |---|---|---|---|
-| `iasim_join` | `name` | — | Registra al agente del token en el lobby. Devuelve `agent_id`, spawn y estado. |
+| `iasim_join` | `name` | — | Registra al agente del token en el mundo abierto. Devuelve `agent_id`, spawn y estado. |
 | `iasim_observe` | — | Libre | Devuelve la observación del tick actual o la última disponible. |
 | `iasim_wait_for_tick` | `since_tick`, `timeout_ms?` | Libre | Espera hasta que haya un tick nuevo; devuelve observación o `NO_NEW_TICK`. |
 | `iasim_get_recipes` | — | Libre | Recetas conocidas, requisitos y estaciones. |
@@ -1351,7 +1357,7 @@ Las tools devuelven un resultado estructurado. Los errores de validación se dev
 | `ALREADY_ACTED` | Ya se envió una acción principal en este tick. |
 | `INVALID_TICK` | Tick inexistente o futuro. |
 | `AGENT_DEAD` | El agente está muerto. |
-| `AGENT_ABSENT` | El agente está ausente; debe reconectarse. |
+| `AGENT_ABSENT` | El agente conectado está ausente por timeouts; no puede actuar hasta volver a responder. |
 | `NOT_YOUR_TURN` | La acción no corresponde al agente autenticado. |
 | `INVALID_TARGET` | Objetivo inexistente o no visible. |
 | `OUT_OF_RANGE` | Objetivo fuera de alcance. |
@@ -1391,12 +1397,10 @@ Ejemplo mínimo:
 [game]
 seed = 42
 headless = false
-min_agents = 1
 max_agents = 8
 tick_minutes = 5
 turn_timeout_ms = 60000
 timeout_disconnects = 3
-allow_late_join = false
 pause_on_overlay = true
 autosave_every_ticks = 1000
 
@@ -1447,16 +1451,17 @@ confirm_destructive = true
 
 | Comando / flag | Descripción |
 |---|---|
-| `python -m iasim` | Inicia la UI con la configuración por defecto. |
+| `iasim serve` | Inicia la GUI del operador y el servidor MCP con la configuración por defecto. |
+| `python -m iasim` | Alias del arranque integrado `iasim serve`. |
 | `--config PATH` | Carga un TOML. |
 | `--seed N` | Fija la seed. |
-| `--headless` | Ejecuta sin ventana. |
-| `--agents N` | Número de agentes del lobby. |
+| `--headless` | Ejecuta el servidor sin GUI. |
+| `--host H` | Host de escucha; por defecto `127.0.0.1`. La LAN se habilita explícitamente con `0.0.0.0` o la IP local. |
+| `--max-agents N` | Máximo de agentes concurrentes (1–8). |
 | `--port N` | Puerto MCP. |
 | `--dev-open` | Desactiva auth solo en loopback. |
 | `--load PATH` | Carga una sesión guardada. |
 | `--replay PATH` | Reproduce una corrida. |
-| `--min-agents N` | Mínimo de agentes para iniciar. |
 | `--no-autosave` | Desactiva autoguardado. |
 | `--log-dir PATH` | Directorio de logs. |
 | `--version` | Versión de IASim y del esquema MCP. |
@@ -1464,7 +1469,7 @@ confirm_destructive = true
 
 Códigos de salida:
 
-- `0`: sesión finalizada correctamente.
+- `0`: servidor cerrado correctamente.
 - `1`: error de configuración.
 - `2`: error de generación de mundo.
 - `3`: error de MCP o puerto ocupado.
@@ -1503,7 +1508,7 @@ Cada sesión escribe en `runs/<timestamp>-seed<seed>/`:
 | Archivo | Contenido |
 |---|---|
 | `session.json` | Configuración efectiva, seed, versiones, hora de inicio, agentes, `debug_used` y resultado final. |
-| `events.jsonl` | Eventos del mundo: movimiento, recolección, crafteo, clima, combate, muerte, timeouts, etc. |
+| `events.jsonl` | Eventos del mundo y de conexión: join, disconnect, espera, movimiento, recolección, crafteo, clima, combate, muerte, timeouts, etc. |
 | `actions.jsonl` | Llamadas MCP de acción, argumentos, `request_id`, resultado y tick. |
 | `thoughts.jsonl` | Reportes de mente con tick, agente, intención, pensamiento, plan y confianza. |
 | `debug.jsonl` | Inyecciones de la consola de debug del operador. |
@@ -1511,8 +1516,9 @@ Cada sesión escribe en `runs/<timestamp>-seed<seed>/`:
 | `snapshots/` | Snapshots cada `snapshot_every_ticks` (por defecto 100). |
 | `summary.json` | Métricas finales y hash de estado. |
 | `metrics.csv` | Métricas tabulares por agente y por sesión. |
-| `agents.json` | Tokens y slots de agente; permisos restringidos, nunca en logs. |
+| `agents.json` | Tokens estables por slot y estado de ocupación; permisos restringidos, nunca en logs ni en la GUI. |
 
+- La GUI puede mostrar la actividad en vivo; los archivos JSONL permiten revisar la sesión después.
 - El guardado manual (`F9`) escribe un snapshot completo y actualiza `session.json`.
 - La carga (`F10` o `--load`) restaura seed, RNG, tick, agentes, mundo, estructuras, inventarios, memoria y cola de turno.
 - El guardado debe ser atómico: escribir archivo temporal y renombrar.
@@ -1588,7 +1594,7 @@ Las métricas se calculan por agente y por sesión. Se guardan en `summary.json`
 | RNF-07 | Robustez | Entradas inválidas, desconexiones y timeouts no derriban el proceso. |
 | RNF-08 | Persistencia | Guardado/carga restaura el mismo hash de estado. |
 | RNF-09 | Portabilidad | Windows 10+, Linux y macOS con Python 3.12. |
-| RNF-10 | Seguridad | Bind loopback por defecto, tokens, validación de esquemas y límites de entrada. |
+| RNF-10 | Seguridad | Bind loopback por defecto; LAN solo opt-in con tokens y advertencia; validación de esquemas y límites de entrada. |
 | RNF-11 | Mantenibilidad | Módulos desacoplados, type hints y cobertura de tests del núcleo ≥ 80 %. |
 | RNF-12 | Observabilidad | Logs estructurados con tick, tipo, actor, objetivo y resultado. |
 | RNF-13 | Usabilidad | Todos los atajos críticos documentados en `F1`; UI legible a 160 × 45. |
@@ -1615,7 +1621,7 @@ Las métricas se calculan por agente y por sesión. Se guardan en `summary.json`
 | AC-09 | Un timeout pierde el turno; tres consecutivos marcan al agente como ausente. | Test de timeouts. |
 | AC-10 | Dos agentes en rango completan un intercambio atómico; si falta un ítem, falla sin efectos parciales. | Test de comercio. |
 | AC-11 | Un agente puede matar a otro; se genera cadáver, se registra causa y se puede saquear. | Test de combate/muerte. |
-| AC-12 | La sesión termina cuando muere el último agente vivo. | Test de fin de sesión. |
+| AC-12 | La muerte del último agente no cierra el servidor: deja cadáver, la simulación se pausa y la GUI queda esperando; una nueva conexión puede entrar si hay un slot libre. | Test de fin de sesión y espera. |
 | AC-13 | Un árbol o peñasco bloquea la visión; el tile no aparece en la observación del agente. | Test de FOV. |
 | AC-14 | La memoria del agente persiste entre ticks y marca recursos desactualizados. | Test de memoria. |
 | AC-15 | Guardar y cargar restaura el mismo hash de estado. | Test de persistencia. |
@@ -1631,6 +1637,10 @@ Las métricas se calculan por agente y por sesión. Se guardan en `summary.json`
 | AC-25 | Al finalizar una sesión se generan `summary.json` y `metrics.csv` con las métricas por agente. | Test de métricas. |
 | AC-26 | Una inyección de debug queda registrada y un replay reproduce el mismo estado; los agentes no pueden invocarla. | Test de debug/replay y seguridad. |
 | AC-27 | En F2, la nieve se acumula por tile y el pronóstico es probabilístico, no exacto. | Test de clima estacional. |
+| AC-28 | El servidor arranca en loopback por defecto; `--host` habilita LAN, exige token y muestra la URL y una advertencia; un agente autenticado puede unirse desde otro host de la misma red. | Test de configuración/seguridad y checklist LAN. |
+| AC-29 | Un agente desconectado desaparece del mundo, libera su slot y deja su inventario en el suelo; no quedan agentes fantasma. | Test de desconexión. |
+| AC-30 | `iasim serve` abre la GUI del operador y muestra en vivo a los agentes conectados, su estado y su actividad; `--headless` no abre ventana. | Checklist visual y test headless. |
+| AC-31 | `events.jsonl`, `actions.jsonl` y `thoughts.jsonl` registran join, disconnect, acciones y reportes de mente sin tokens; la GUI permite revisar la actividad. | Test de logs y checklist visual. |
 
 ---
 
@@ -1658,13 +1668,14 @@ Objetivo: sandbox de supervivencia observable y testeable.
 - Día/noche, lluvia, tormenta, niebla, viento, temperatura y mojadura.
 - FOV, memoria, percepción limitada y observación MCP completa.
 - Comunicación local, alianzas, comercio, combate, huida, cadáveres y saqueo.
-- MCP con todas las tools, auth, timeouts, reconexión e idempotencia.
+- MCP con todas las tools, auth, timeouts e idempotencia.
+- Servidor LAN permanente con GUI de operador, agentes efímeros por conexión, máximo concurrente configurable, monitoreo en vivo y logs.
 - Panel derecho completo: agentes, ficha, mente, entorno, relaciones y eventos.
 - Pensamientos reportados y timeline.
 - Vistas `F1`–`F8` y atajos.
 - Guardado/carga, logs JSONL, métricas y replay.
 - Agente de referencia y tests de integración.
-- Criterio de salida: partida de 3 días con 2 agentes, cooperación/competencia, muerte permanente y replay reproducible.
+- Criterio de salida: sesión LAN supervisada con al menos 2 agentes concurrentes que se conectan y desconectan, interactúan con el entorno y entre ellos, con GUI en vivo, logs y replay reproducible.
 
 ### 11.3 Fase 2 — Contenido y análisis
 
@@ -1708,9 +1719,10 @@ Objetivo: sandbox de supervivencia observable y testeable.
 | Riesgo | Impacto | Mitigación |
 |---|---|---|
 | Fuente Unicode incompleta o “tofu” | Alto | Incluir fuente con licencia, test de glifos y fallback ASCII. |
-| Agentes LLM lentos o con timeouts | Alto | Deadline configurable, skip, estado ausente, reconexión y modo headless rápido. |
+| Agentes LLM lentos, desconectados o con timeouts | Alto | Deadline configurable, skip, estado ausente solo si sigue conectado, desconexión que retira al agente y modo headless rápido. |
 | Pérdida de determinismo por floats | Alto | Enteros escalados, RNG con seed explícita, orden de resolución fijo y tests de hash. |
 | Exploits de percepción (leer mapa completo) | Alto | Observación limitada, tools sin admin, validación de rangos y tests de fuga de información. |
+| Exposición LAN con tokens por HTTP | Alto | LAN opt-in, token por slot, advertencia visible, red de confianza/VPN; TLS queda fuera del MVP. |
 | Balance demasiado duro o trivial | Medio | Constantes configurables, agente de referencia, telemetría y ajuste por seeds. |
 | Complejidad de UI en 80 columnas | Medio | Resumen en panel + vistas a pantalla completa + fuentes escalables. |
 | Latencia de IA y experiencia de observación | Medio | Pausa automática al abrir overlays, indicadores de “esperando agentes” y timeline. |
@@ -1735,7 +1747,7 @@ Objetivo: sandbox de supervivencia observable y testeable.
 | Turnos | Tick global; una acción principal y un `say` gratuito por tick; timeout configurable. |
 | Ventana y mapa | 160 × 45; mapa 80 × 40; isla completa sin scroll. |
 | Bioma | Isla boscosa con río y costa. |
-| Agentes | 1 por defecto, hasta 8 configurables. |
+| Agentes | Servidor abierto con hasta 8 agentes concurrentes; cada agente existe solo mientras su conexión MCP está abierta. |
 | Atributos | Necesidades + capacidades + clima. |
 | Crafteo | Dos niveles, con mesa de trabajo. |
 | Clima | MVP: día/noche, lluvia, tormenta, niebla, viento y temperatura; nieve por tile y estaciones de 7 días en F2. |
@@ -1744,9 +1756,11 @@ Objetivo: sandbox de supervivencia observable y testeable.
 | Agente de prueba | Agente scripted de referencia incluido. |
 | Interacción | Cooperación, competencia, comercio, alianzas y eliminación; los agentes deciden. |
 | Evaluación | Logs JSONL + métricas + replay determinista. |
-| Fin de partida | Muerte permanente, sin respawn; cadáver saqueable; fin cuando no quedan vivos. |
+| Fin de partida | Muerte permanente, sin respawn; cadáver saqueable; el servidor sigue abierto cuando no quedan agentes y el operador decide cuándo terminar. |
 | Mapa | Procedural con seed reproducible. |
-| Ejecución | UI + headless. |
+| Ejecución | GUI del operador + servidor MCP; headless para tests y automatización. |
+| Red | Loopback por defecto; LAN opt-in con token y advertencia; sin TLS en el MVP. |
+| Conexión | Agente efímero por conexión MCP; desconexión lo retira, libera el slot y deja el inventario en el suelo. |
 | Comunicación | Mensajes locales, alianzas y comercio. |
 | Combate | Táctico simple: melee, piedra arrojada, huida y sangrado. |
 | Inventario | Peso + slots + equipo. |
