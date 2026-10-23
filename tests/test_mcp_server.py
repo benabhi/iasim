@@ -71,7 +71,13 @@ def _data(result: Any) -> dict[str, Any]:
 
 
 def _start_server(app: Any) -> tuple[uvicorn.Server, threading.Thread, int]:
-    config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning")
+    config = uvicorn.Config(
+        app,
+        host="127.0.0.1",
+        port=0,
+        log_level="warning",
+        timeout_graceful_shutdown=1,
+    )
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
