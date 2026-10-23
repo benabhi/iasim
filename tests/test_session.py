@@ -95,6 +95,7 @@ class GameSessionTests(unittest.TestCase):
                 "fill",
                 "craft",
                 "build",
+                "attack",
                 "rest",
                 "sleep",
             },

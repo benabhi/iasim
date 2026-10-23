@@ -272,6 +272,16 @@ def create_server(
         return session.say(agent_id, message, target_id)
 
     @server.tool()
+    def iasim_attack(tick: int, target_id: str) -> dict[str, Any]:
+        """Attack an adjacent living agent with the equipped weapon."""
+        agent_id = _guard(session, limiter, LimitKind.ACTION)
+        if isinstance(agent_id, dict):
+            return agent_id
+        if _text_too_long(target_id):
+            return _message_too_long(session)
+        return session.attack(agent_id, tick, target_id)
+
+    @server.tool()
     def iasim_report_mind(
         tick: int,
         intent: str,

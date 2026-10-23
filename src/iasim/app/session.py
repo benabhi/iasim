@@ -25,6 +25,7 @@ from iasim.domain.chat import (
     within_chat_radius,
 )
 from iasim.domain.climate import apply_climate_tick, effective_vision
+from iasim.domain.combat import combat_resolvers
 from iasim.domain.construction import advance_fires, construction_resolvers
 from iasim.domain.crafting_actions import crafting_resolvers
 from iasim.domain.geometry import Position
@@ -185,6 +186,7 @@ class GameSession:
             **item_action_resolvers(self._catalog),
             **crafting_resolvers(self._catalog),
             **construction_resolvers(self._catalog),
+            **combat_resolvers(),
             **rest_sleep_resolvers(),
         }
         self._phase = SessionPhase.WAITING
@@ -871,6 +873,15 @@ class GameSession:
             (("structure_id", structure_id), ("x", x), ("y", y)),
         )
 
+    def attack(self, agent_id: str, tick: int, target_id: str) -> dict[str, Any]:
+        """Queue one adjacent melee attack against another agent."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.ATTACK,
+            (("target_id", target_id),),
+        )
+
     def _queue(
         self,
         agent_id: str,
@@ -1319,6 +1330,7 @@ class GameSession:
                 {"action": "fill", "available": True},
                 {"action": "craft", "available": True},
                 {"action": "build", "available": True},
+                {"action": "attack", "available": True},
                 {"action": "rest", "available": True},
                 {"action": "sleep", "available": True},
             ],
