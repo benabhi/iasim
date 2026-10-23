@@ -24,6 +24,7 @@ from iasim.domain.hashing import canonical_state_hash
 from iasim.domain.identifiers import AgentId
 from iasim.domain.item_actions import item_action_resolvers
 from iasim.domain.items import GroundItem, ItemStack
+from iasim.domain.memory import AgentMemory, MemoryEntry
 from iasim.domain.movement import movement_resolvers
 from iasim.domain.needs import apply_needs_tick
 from iasim.domain.rng import U64_MASK
@@ -824,7 +825,30 @@ class GameSession:
             },
             "perception": {
                 "visible": visible,
-                "memory_updates": [],
+                "memory_updates": [
+                    {
+                        "x": entry.position.x,
+                        "y": entry.position.y,
+                        "tile": entry.tile.value,
+                        "last_seen_tick": entry.last_seen_tick,
+                        "resources": list(entry.resources),
+                        "structure": (
+                            entry.structure.value if entry.structure is not None else None
+                        ),
+                        "stale": entry.stale,
+                    }
+                    for entry in agent.memory.tiles
+                ],
+                "memory_agents": [
+                    {
+                        "id": entry.agent_id,
+                        "x": entry.position.x,
+                        "y": entry.position.y,
+                        "last_seen_tick": entry.last_seen_tick,
+                        "stale": entry.stale,
+                    }
+                    for entry in agent.memory.agents
+                ],
                 "agents": [],
                 "messages": [],
             },
@@ -891,7 +915,61 @@ class GameSession:
             ambient_temperature_centi=weather.ambient_temperature_centi,
         )
         state = apply_sleep_tick(state)
-        return apply_status_tick(state)
+        state = apply_status_tick(state)
+        return self._update_memory_locked(state)
+
+    def _update_memory_locked(self, state: SessionState) -> SessionState:
+        clock = self._engine.clock
+        agents: list[Agent] = []
+        for agent in state.agents:
+            if not agent.is_alive:
+                agents.append(agent)
+                continue
+            radius = effective_vision(
+                agent,
+                clock,
+                state.weather,
+                state.structures,
+            )
+            visible = compute_fov(state.world, agent.position, radius)
+            visible_tiles = tuple(
+                MemoryEntry(
+                    position=position,
+                    tile=state.world.tile_at(position),
+                    last_seen_tick=state.tick,
+                    resources=tuple(
+                        resource.resource_id
+                        for resource in self._catalog.resources_for_tile(
+                            state.world.tile_at(position)
+                        )
+                    ),
+                    structure=next(
+                        (
+                            structure.kind
+                            for structure in state.structures
+                            if structure.position == position
+                        ),
+                        None,
+                    ),
+                )
+                for position in sorted(visible, key=lambda item: (item.y, item.x))
+            )
+            visible_agents = tuple(
+                AgentMemory(
+                    agent_id=other.agent_id,
+                    position=other.position,
+                    last_seen_tick=state.tick,
+                )
+                for other in state.agents
+                if other.agent_id != agent.agent_id and other.is_alive and other.position in visible
+            )
+            agents.append(
+                replace(
+                    agent,
+                    memory=agent.memory.refresh(visible_tiles, visible_agents),
+                )
+            )
+        return replace(state, agents=tuple(agents))
 
     def _write_tokens(self, path: Path) -> None:
         data = {

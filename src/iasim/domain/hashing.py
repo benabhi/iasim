@@ -82,6 +82,7 @@ def _agent_payload(agent: Agent) -> dict[str, Any]:
         "y": agent.position.y,
         "status": agent.status.value,
         "sleep_until_tick": agent.sleep_until_tick,
+        "memory": _memory_payload(agent),
         "attributes": {
             "health_centi": agent.attributes.health_centi,
             "hunger_centi": agent.attributes.hunger_centi,
@@ -108,6 +109,33 @@ def _agent_payload(agent: Agent) -> dict[str, Any]:
         "equipment": [
             {"slot": slot.value, "item_id": spec.item_id}
             for slot, spec in sorted(agent.equipment.items, key=lambda entry: entry[0].value)
+        ],
+    }
+
+
+def _memory_payload(agent: Agent) -> dict[str, Any]:
+    return {
+        "tiles": [
+            {
+                "x": entry.position.x,
+                "y": entry.position.y,
+                "tile": entry.tile.value,
+                "last_seen_tick": entry.last_seen_tick,
+                "resources": list(entry.resources),
+                "structure": entry.structure.value if entry.structure is not None else None,
+                "stale": entry.stale,
+            }
+            for entry in agent.memory.tiles
+        ],
+        "agents": [
+            {
+                "agent_id": entry.agent_id,
+                "x": entry.position.x,
+                "y": entry.position.y,
+                "last_seen_tick": entry.last_seen_tick,
+                "stale": entry.stale,
+            }
+            for entry in agent.memory.agents
         ],
     }
 

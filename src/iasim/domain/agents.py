@@ -16,6 +16,7 @@ from iasim.domain.items import (
     ItemSpec,
     ItemStack,
 )
+from iasim.domain.memory import Memory
 
 _CENTI = 100
 
@@ -114,11 +115,14 @@ class Agent:
     equipment: Equipment = field(default_factory=Equipment)
     status: AgentStatus = AgentStatus.ACTIVE
     sleep_until_tick: int | None = None
+    memory: Memory = field(default_factory=Memory)
 
     def __post_init__(self) -> None:
         validate_agent_id(self.agent_id)
         if not isinstance(self.status, AgentStatus):
             raise ValueError(f"status must be an AgentStatus, got {self.status!r}")
+        if not isinstance(self.memory, Memory):
+            raise ValueError(f"memory must be a Memory, got {self.memory!r}")
         if self.sleep_until_tick is not None and (
             type(self.sleep_until_tick) is not int or self.sleep_until_tick < 0
         ):
