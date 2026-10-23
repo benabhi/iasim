@@ -686,6 +686,7 @@ Leyenda de prioridad:
 | RF-1013 | El sistema debe registrar todas las llamadas de acción y sus resultados. | M | F1 |
 | RF-1014 | El sistema debe fijar y documentar la versión del protocolo y del esquema. | M | F1 |
 | RF-1015 | Un agente desconectado debe retirarse del mundo y liberar su slot/token; una conexión nueva puede ocupar ese slot, sin reanudar el estado anterior. | M | F1 |
+| RF-1016 | El sistema debe aceptar y acumular por agente el uso de IA reportado (modelo, esfuerzo, tokens de entrada/salida y costo) sin alterar la simulación. | S | F1 |
 
 ### 4.11 Interfaz de usuario (RF-1100)
 
@@ -719,6 +720,7 @@ Leyenda de prioridad:
 | RF-1126 | La UI debe estar en español y los identificadores MCP en inglés. | M | F1 |
 | RF-1127 | La UI debe permitir mouse opcional para seleccionar agentes y tiles en F2; toda función crítica debe seguir teniendo atajo de teclado. | S | F2 |
 | RF-1128 | El operador debe disponer de una consola de debug (`F12`) para inyectar recursos, clima, hora y teletransporte, sin exponerla por MCP. | S | F2 |
+| RF-1129 | La ficha del agente debe mostrar el uso de IA reportado: modelo, esfuerzo, tokens de entrada/salida/total y costo aproximado en USD. | S | F1 |
 
 ### 4.12 Persistencia, replay y métricas (RF-1200)
 
@@ -844,6 +846,7 @@ El panel derecho debe priorizar la lectura rápida. La pestaña `RESUMEN` agrupa
    - Fuerza, destreza, resistencia y visión efectiva.
    - Capacidad de carga usada/total.
    - Inventario resumido y equipo.
+   - Uso de IA reportado: modelo, esfuerzo, tokens de entrada/salida/total y costo aproximado en USD.
    - El inventario completo y el equipo están en `VÍNCULOS` y en `F2`.
 
 4. **Mente (reportado)**
@@ -1013,7 +1016,7 @@ Layout de tres columnas:
 
 | Columna izquierda | Columna central | Columna derecha |
 |---|---|---|
-| Identidad, posición, salud, necesidades, temperatura, estados, habilidades, equipo y carga. | Mente: intención, pensamiento, plan, próximo paso y timeline de reportes/acciones (últimos 20). | Inventario completo, relaciones, alianzas, ofertas, mensajes y causa de muerte si corresponde. |
+| Identidad, posición, salud, necesidades, temperatura, estados, habilidades, equipo, carga y uso de IA reportado. | Mente: intención, pensamiento, plan, próximo paso y timeline de reportes/acciones (últimos 20). | Inventario completo, relaciones, alianzas, ofertas, mensajes y causa de muerte si corresponde. |
 
 - Se abre con el agente seleccionado.
 - `Tab` cicla agentes sin salir.
@@ -1189,6 +1192,7 @@ El reporte es **voluntario, no verificado y potencialmente engañoso**. La UI lo
 | `iasim_inspect` | `target_id` o `x,y` | Libre | Detalle de una entidad visible. |
 | `iasim_get_session_info` | — | Libre | Seed, día, tick, versión, estado de pausa y agentes. |
 | `iasim_report_mind` | `tick`, `intent`, `thought`, `plan?`, `confidence?` | Libre, 1/tick | Reporta intención/pensamiento para el operador. |
+| `iasim_report_usage` | `tick`, `input_tokens`, `output_tokens`, `model`, `reasoning_effort?`, `cost_usd?` | Libre, acumulativo | Reporta uso de IA para el operador; no consume acción ni altera la simulación. |
 | `iasim_leave` | — | — | Cierra la sesión del agente; no lo mata. |
 
 #### 6.3.2 Acciones principales (máximo una por tick)
@@ -1229,6 +1233,9 @@ Todas las acciones principales aceptan `tick`, `request_id?` y `reason?` (≤ 28
 
 - Una acción principal por tick; `iasim_say` y `iasim_report_mind` son gratuitas.
 - Las tools de información no consumen acción, pero están limitadas por tasa.
+- `iasim_report_usage` es gratuito y acumulativo por agente; agrupa por modelo y esfuerzo, y se descarta al desconectarse el agente.
+- El `tick` de uso puede ser el actual o uno anterior, para tolerar latencia del modelo; un tick futuro se rechaza.
+- El costo reportado por el agente tiene prioridad; si falta, se estima con `[usage.pricing]`; si tampoco hay precio, queda como desconocido.
 - Toda acción devuelve `queued`; el resultado final aparece en la observación siguiente como `action_result`.
 - Las acciones se validan al encolar y se revalidan al resolver; una acción puede fallar si el mundo cambió.
 - `request_id` es idempotente durante la sesión: repetir la misma llamada no duplica la acción.
@@ -1336,6 +1343,8 @@ Campos obligatorios:
 - `inventory` y `available_actions`.
 - `last_action_result` si existe.
 
+El uso de IA reportado no forma parte de la observación del agente ni del estado canónico de la simulación; se acumula para el operador y se descarta al desconectarse el agente.
+
 En fase 2, `environment` incluye además `forecast` cuando el pronóstico está habilitado:
 
 ```json
@@ -1385,6 +1394,7 @@ Las tools devuelven un resultado estructurado. Los errores de validación se dev
 | `NOT_IN_RANGE` | Interlocutor fuera del rango social. |
 | `RATE_LIMITED` | Demasiadas llamadas. |
 | `MESSAGE_TOO_LONG` | Texto excede el límite. |
+| `INVALID_USAGE` | Reporte de uso inválido: modelo, esfuerzo, tokens o costo fuera de rango. |
 | `NO_NEW_TICK` | `wait_for_tick` venció sin tick nuevo. |
 | `INTERNAL_ERROR` | Error inesperado; el servidor sigue operativo. |
 
@@ -1392,6 +1402,7 @@ Las tools devuelven un resultado estructurado. Los errores de validación se dev
 
 - Rate limit sugerido: 20 llamadas de información por segundo y 5 llamadas de acción por segundo por agente; la segunda acción del tick se rechaza.
 - `say.message` ≤ 280 caracteres; `report_mind.thought` ≤ 500; `intent` ≤ 160; `plan` ≤ 300; `reason` ≤ 280.
+- `report_usage.model` = 1-80 caracteres imprimibles; `reasoning_effort` ≤ 32; tokens ≥ 0; `cost_usd` finito y ≥ 0.
 - Se eliminan caracteres de control, ANSI y saltos de línea excesivos.
 - Toda entrada se valida con esquemas Pydantic y rangos cerrados.
 - No se usa `eval`, `exec` ni se interpretan expresiones enviadas por agentes.
@@ -1453,6 +1464,14 @@ map_zoom_font_height = 24
 dir = "runs"
 snapshot_every_ticks = 100
 export_csv = true
+
+[usage]
+# Precios opcionales en USD por millón de tokens. Sin precio, el costo
+# solo se conoce si el agente lo reporta.
+
+[usage.pricing."gpt-5"]
+input_per_million_usd = 1.25
+output_per_million_usd = 10.0
 
 [debug]
 enabled = true
@@ -1699,6 +1718,7 @@ Objetivo: sandbox de supervivencia observable y testeable.
 - MCP con todas las tools, auth, timeouts e idempotencia.
 - Servidor LAN permanente con GUI de operador, agentes efímeros por conexión, máximo concurrente configurable, monitoreo en vivo y logs.
 - Panel derecho completo: agentes, ficha, mente, entorno, relaciones y eventos.
+- Uso de IA reportado por agente: modelo, esfuerzo, tokens y costo aproximado.
 - Pensamientos reportados y timeline.
 - Vistas `F1`–`F8` y atajos.
 - Guardado/carga, logs JSONL, métricas y replay.

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import secrets
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path
@@ -43,6 +44,7 @@ from iasim.domain.turns import (
     TurnEngine,
     TurnResult,
 )
+from iasim.domain.usage import AgentUsage, CostSource, ModelPricing, UsageEntry
 from iasim.domain.weather import (
     DEFAULT_WEATHER_MAX_TICKS,
     DEFAULT_WEATHER_MIN_TICKS,
@@ -101,6 +103,7 @@ class GameSession:
         catalog: Catalog | None = None,
         weather_min_ticks: int = DEFAULT_WEATHER_MIN_TICKS,
         weather_max_ticks: int = DEFAULT_WEATHER_MAX_TICKS,
+        usage_pricing: Mapping[str, ModelPricing] | None = None,
     ) -> None:
         if seed < 0:
             raise ValueError(f"seed must be non-negative, got {seed}")
@@ -149,6 +152,8 @@ class GameSession:
         self._catalog = catalog if catalog is not None else load_catalog()
         self._weather_min_ticks = weather_min_ticks
         self._weather_max_ticks = weather_max_ticks
+        self._usage_pricing = dict(usage_pricing or {})
+        self._usage: dict[AgentId, list[UsageEntry]] = {}
         self._resolvers = {
             **movement_resolvers(),
             **move_to_resolvers(),
@@ -297,6 +302,7 @@ class GameSession:
                 clock=self._engine.clock,
             )
             self._names[agent_id] = clean_name
+            self._usage.pop(agent_id, None)
             self._joined_slots.add(slot)
             self._token_agents[token] = agent_id
             self._update_phase_locked()
@@ -333,6 +339,7 @@ class GameSession:
             self._drop_inventory_locked(agent)
             self._names.pop(target, None)
             self._last_results.pop(target, None)
+            self._usage.pop(target, None)
             if token is not None:
                 self._token_agents.pop(token, None)
                 slot = self._token_slots.get(token)
@@ -359,6 +366,136 @@ class GameSession:
             if target not in self._names or agent is None:
                 return self._error("NOT_YOUR_TURN", "agent is not joined")
             return self._observation(agent)
+
+    def report_usage(
+        self,
+        agent_id: str,
+        tick: int,
+        *,
+        input_tokens: int,
+        output_tokens: int,
+        model: str,
+        reasoning_effort: str | None = None,
+        cost_usd: float | None = None,
+    ) -> dict[str, Any]:
+        """Accumulate an agent-reported LLM usage record for the operator."""
+        with self._lock:
+            target = AgentId(agent_id)
+            agent = self._find_agent(agent_id)
+            if target not in self._names or agent is None:
+                return self._error("NOT_YOUR_TURN", "agent is not joined")
+            if self._phase is SessionPhase.FINISHED:
+                return self._error("SESSION_FINISHED", "the session has ended")
+            if (
+                isinstance(tick, bool)
+                or not isinstance(tick, int)
+                or not 0 <= tick <= self._state.tick
+            ):
+                return self._error(
+                    "INVALID_TICK", "usage tick must be between 0 and the current tick"
+                )
+            for label, value in (
+                ("input_tokens", input_tokens),
+                ("output_tokens", output_tokens),
+            ):
+                if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                    return self._error(
+                        "INVALID_USAGE",
+                        f"{label} must be a non-negative integer",
+                    )
+            if not isinstance(model, str):
+                return self._error("INVALID_USAGE", "model must be a string")
+            clean_model = model.strip()
+            if (
+                not clean_model
+                or len(clean_model) > 80
+                or any(not character.isprintable() for character in clean_model)
+            ):
+                return self._error(
+                    "INVALID_USAGE",
+                    "model must be 1-80 printable characters",
+                )
+            clean_effort: str | None = None
+            if reasoning_effort is not None:
+                if not isinstance(reasoning_effort, str):
+                    return self._error("INVALID_USAGE", "reasoning_effort must be a string")
+                candidate = reasoning_effort.strip()
+                if candidate:
+                    if len(candidate) > 32 or any(
+                        not character.isprintable() for character in candidate
+                    ):
+                        return self._error(
+                            "INVALID_USAGE",
+                            "reasoning_effort must be 1-32 printable characters",
+                        )
+                    clean_effort = candidate
+            if cost_usd is not None:
+                if isinstance(cost_usd, bool) or not isinstance(cost_usd, (int, float)):
+                    return self._error("INVALID_USAGE", "cost_usd must be a number")
+                reported_cost = float(cost_usd)
+                if not math.isfinite(reported_cost) or reported_cost < 0:
+                    return self._error(
+                        "INVALID_USAGE",
+                        "cost_usd must be finite and non-negative",
+                    )
+                entry_cost: float | None = reported_cost
+                cost_source = CostSource.REPORTED
+            else:
+                pricing = self._usage_pricing.get(clean_model)
+                if pricing is None:
+                    entry_cost = None
+                    cost_source = CostSource.UNKNOWN
+                else:
+                    entry_cost = pricing.estimate(input_tokens, output_tokens)
+                    cost_source = CostSource.ESTIMATED
+            try:
+                entry = UsageEntry(
+                    model=clean_model,
+                    reasoning_effort=clean_effort,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_usd=entry_cost,
+                    cost_source=cost_source,
+                    cost_complete=entry_cost is not None,
+                )
+            except ValueError as exc:
+                return self._error("INVALID_USAGE", str(exc))
+            bucket = self._usage.setdefault(target, [])
+            for index, current in enumerate(bucket):
+                if (current.model, current.reasoning_effort) == (
+                    clean_model,
+                    clean_effort,
+                ):
+                    merged = current.merged_with(entry)
+                    del bucket[index]
+                    bucket.append(merged)
+                    break
+            else:
+                bucket.append(entry)
+            usage = AgentUsage(tuple(bucket))
+            return {
+                "ok": True,
+                "schema_version": SCHEMA_VERSION,
+                "tick": self._state.tick,
+                "usage": usage.as_dict(),
+            }
+
+    def usage_for(self, agent_id: str) -> AgentUsage | None:
+        """Return accumulated usage for a joined agent, or None if not joined."""
+        with self._lock:
+            target = AgentId(agent_id)
+            if target not in self._names:
+                return None
+            return AgentUsage(tuple(self._usage.get(target, ())))
+
+    def usage_snapshot(self) -> dict[AgentId, AgentUsage]:
+        """Return accumulated usage for every agent that has reported it."""
+        with self._lock:
+            return {
+                agent_id: AgentUsage(tuple(entries))
+                for agent_id, entries in self._usage.items()
+                if entries
+            }
 
     def move(self, agent_id: str, tick: int, dx: int, dy: int) -> dict[str, Any]:
         """Queue one primary move action for the current tick."""
@@ -598,6 +735,7 @@ class GameSession:
                 catalog=self._catalog,
                 weather_min_ticks=self._weather_min_ticks,
                 weather_max_ticks=self._weather_max_ticks,
+                usage_pricing=self._usage_pricing,
             )
 
     def health(self) -> dict[str, Any]:

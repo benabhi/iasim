@@ -240,6 +240,29 @@ def create_server(
         return session.build(agent_id, tick, structure_id, x, y)
 
     @server.tool()
+    def iasim_report_usage(
+        tick: int,
+        input_tokens: int,
+        output_tokens: int,
+        model: str,
+        reasoning_effort: str | None = None,
+        cost_usd: float | None = None,
+    ) -> dict[str, Any]:
+        """Report LLM token usage and model metadata for operator statistics."""
+        agent_id = _joined_agent(session)
+        if agent_id is None:
+            return _unauthorized(session)
+        return session.report_usage(
+            agent_id,
+            tick,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            model=model,
+            reasoning_effort=reasoning_effort,
+            cost_usd=cost_usd,
+        )
+
+    @server.tool()
     def iasim_wait_for_tick(since_tick: int, timeout_ms: int = 1000) -> dict[str, Any]:
         """Wait until a tick newer than since_tick is available."""
         agent_id = _joined_agent(session)

@@ -10,6 +10,7 @@ from iasim.domain.geometry import Position
 from iasim.domain.identifiers import AgentId
 from iasim.domain.session import SessionState
 from iasim.domain.tiles import TileType, WorldMap
+from iasim.domain.usage import AgentUsage, CostSource, UsageEntry
 from iasim.ui import theme
 from iasim.ui.layout import render_base_screen, render_help_screen
 from iasim.world.generation import generate_layout
@@ -102,6 +103,33 @@ class BaseLayoutTests(unittest.TestCase):
         self.assertIn("AGENTES 3/8", panel_text)
         self.assertIn("ENTORNO", panel_text)
         self.assertIn("INVENTARIO", panel_text)
+
+    def test_panel_shows_reported_ai_usage(self) -> None:
+        usage = {
+            AgentId("ag_01"): AgentUsage(
+                entries=(
+                    UsageEntry(
+                        model="gpt-5",
+                        reasoning_effort="high",
+                        input_tokens=120,
+                        output_tokens=30,
+                        cost_usd=0.01,
+                        cost_source=CostSource.REPORTED,
+                    ),
+                )
+            )
+        }
+        screen = render_base_screen(
+            _state(),
+            NAMES,
+            selected_agent_id=AgentId("ag_01"),
+            usage=usage,
+        )
+        panel_text = "\n".join(screen.row_text(y)[80:] for y in range(45))
+
+        self.assertIn("USO IA (REPORTADO)", panel_text)
+        self.assertIn("gpt-5 / high: 120 in / 30 out", panel_text)
+        self.assertIn("TOTAL 150 tokens - USD 0.0100 (reportado)", panel_text)
 
     def test_snapshot_is_deterministic(self) -> None:
         first = _screen()

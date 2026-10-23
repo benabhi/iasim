@@ -40,6 +40,7 @@ TOOL_NAMES = {
     "iasim_fill",
     "iasim_craft",
     "iasim_build",
+    "iasim_report_usage",
     "iasim_wait_for_tick",
 }
 
@@ -139,6 +140,38 @@ class McpServerTests(unittest.TestCase):
                         joined = _data(await client.call_tool("iasim_join", {"name": "Nia"}))
                         self.assertTrue(joined["ok"])
                         self.assertEqual(joined["spawn"], [2, 2])
+
+                        reported = _data(
+                            await client.call_tool(
+                                "iasim_report_usage",
+                                {
+                                    "tick": 0,
+                                    "input_tokens": 120,
+                                    "output_tokens": 30,
+                                    "model": "gpt-5",
+                                    "reasoning_effort": "high",
+                                    "cost_usd": 0.01,
+                                },
+                            )
+                        )
+                        self.assertTrue(reported["ok"])
+                        self.assertEqual(reported["usage"]["total_tokens"], 150)
+                        self.assertEqual(reported["usage"]["cost_source"], "reported")
+                        self.assertAlmostEqual(reported["usage"]["cost_usd"], 0.01)
+
+                        invalid_usage = _data(
+                            await client.call_tool(
+                                "iasim_report_usage",
+                                {
+                                    "tick": 0,
+                                    "input_tokens": -1,
+                                    "output_tokens": 0,
+                                    "model": "gpt-5",
+                                },
+                            )
+                        )
+                        self.assertFalse(invalid_usage["ok"])
+                        self.assertEqual(invalid_usage["error"]["code"], "INVALID_USAGE")
 
                         observation = _data(await client.call_tool("iasim_observe", {}))
                         self.assertEqual(observation["tick"], 0)
