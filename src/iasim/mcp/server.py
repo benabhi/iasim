@@ -17,6 +17,7 @@ from starlette.responses import JSONResponse, Response
 from iasim.app.session import SCHEMA_VERSION, GameSession
 from iasim.config import is_loopback_host
 from iasim.domain.identifiers import AgentId
+from iasim.mcp.limits import MAX_TEXT_FIELD_LENGTH, LimitKind, RateLimiter
 
 DEFAULT_RESOURCE_URL = "http://127.0.0.1:8765/mcp"
 DEFAULT_ISSUER_URL = "http://127.0.0.1:8765"
@@ -88,6 +89,7 @@ def create_server(
     issuer_url: str = DEFAULT_ISSUER_URL,
 ) -> MCPServer[Any]:
     """Create the authenticated MCP server and minimal F0 tools."""
+    limiter = RateLimiter()
     server: MCPServer[Any] = MCPServer(
         "IASim",
         token_verifier=SessionTokenVerifier(session),
@@ -102,6 +104,8 @@ def create_server(
     @server.tool()
     def iasim_join(name: str) -> dict[str, Any]:
         """Join the session with the bearer token and return the agent id."""
+        if _text_too_long(name):
+            return _message_too_long(session)
         access = get_access_token()
         if access is None:
             return _unauthorized(session)
@@ -110,49 +114,51 @@ def create_server(
     @server.tool()
     def iasim_observe() -> dict[str, Any]:
         """Return the current perception-limited observation."""
-        agent_id = _joined_agent(session)
-        if agent_id is None:
-            return _unauthorized(session)
+        agent_id = _guard(session, limiter, LimitKind.INFO)
+        if isinstance(agent_id, dict):
+            return agent_id
         return session.observe(agent_id)
 
     @server.tool()
     def iasim_move(tick: int, dx: int, dy: int) -> dict[str, Any]:
         """Queue a one-cell move in one of eight directions."""
-        agent_id = _joined_agent(session)
-        if agent_id is None:
-            return _unauthorized(session)
+        agent_id = _guard(session, limiter, LimitKind.ACTION)
+        if isinstance(agent_id, dict):
+            return agent_id
         return session.move(agent_id, tick, dx, dy)
 
     @server.tool()
     def iasim_move_to(tick: int, x: int, y: int) -> dict[str, Any]:
         """Advance one step along a deterministic route to the target."""
-        agent_id = _joined_agent(session)
-        if agent_id is None:
-            return _unauthorized(session)
+        agent_id = _guard(session, limiter, LimitKind.ACTION)
+        if isinstance(agent_id, dict):
+            return agent_id
         return session.move_to(agent_id, tick, x, y)
 
     @server.tool()
     def iasim_wait(tick: int) -> dict[str, Any]:
         """Queue a wait action for the current tick."""
-        agent_id = _joined_agent(session)
-        if agent_id is None:
-            return _unauthorized(session)
+        agent_id = _guard(session, limiter, LimitKind.ACTION)
+        if isinstance(agent_id, dict):
+            return agent_id
         return session.wait(agent_id, tick)
 
     @server.tool()
     def iasim_rest(tick: int) -> dict[str, Any]:
         """Rest for one tick and recover energy."""
-        agent_id = _joined_agent(session)
-        if agent_id is None:
-            return _unauthorized(session)
+        agent_id = _guard(session, limiter, LimitKind.ACTION)
+        if isinstance(agent_id, dict):
+            return agent_id
         return session.rest(agent_id, tick)
 
     @server.tool()
     def iasim_sleep(tick: int, until: str | None = None) -> dict[str, Any]:
         """Sleep until energy_full, dawn, or hours:N."""
-        agent_id = _joined_agent(session)
-        if agent_id is None:
-            return _unauthorized(session)
+        agent_id = _guard(session, limiter, LimitKind.ACTION)
+        if isinstance(agent_id, dict):
+            return agent_id
+        if _text_too_long(until):
+            return _message_too_long(session)
         return session.sleep(agent_id, tick, until)
 
     @server.tool()
@@ -163,9 +169,11 @@ def create_server(
         node_id: str | None = None,
     ) -> dict[str, Any]:
         """Gather a manual or tool-gated resource from an adjacent tile."""
-        agent_id = _joined_agent(session)
-        if agent_id is None:
-            return _unauthorized(session)
+        agent_id = _guard(session, limiter, LimitKind.ACTION)
+        if isinstance(agent_id, dict):
+            return agent_id
+        if _text_too_long(node_id):
+            return _message_too_long(session)
         return session.gather(agent_id, tick, x, y, node_id)
 
     @server.tool()
@@ -176,25 +184,31 @@ def create_server(
         item_id: str | None = None,
     ) -> dict[str, Any]:
         """Pick up a ground item from the current or an adjacent tile."""
-        agent_id = _joined_agent(session)
-        if agent_id is None:
-            return _unauthorized(session)
+        agent_id = _guard(session, limiter, LimitKind.ACTION)
+        if isinstance(agent_id, dict):
+            return agent_id
+        if _text_too_long(item_id):
+            return _message_too_long(session)
         return session.pickup(agent_id, tick, x, y, item_id)
 
     @server.tool()
     def iasim_drop(tick: int, item_id: str, qty: int = 1) -> dict[str, Any]:
         """Drop one or more units of an inventory item."""
-        agent_id = _joined_agent(session)
-        if agent_id is None:
-            return _unauthorized(session)
+        agent_id = _guard(session, limiter, LimitKind.ACTION)
+        if isinstance(agent_id, dict):
+            return agent_id
+        if _text_too_long(item_id):
+            return _message_too_long(session)
         return session.drop(agent_id, tick, item_id, qty)
 
     @server.tool()
     def iasim_eat(tick: int, item_id: str) -> dict[str, Any]:
         """Eat one unit of food from the inventory."""
-        agent_id = _joined_agent(session)
-        if agent_id is None:
-            return _unauthorized(session)
+        agent_id = _guard(session, limiter, LimitKind.ACTION)
+        if isinstance(agent_id, dict):
+            return agent_id
+        if _text_too_long(item_id):
+            return _message_too_long(session)
         return session.eat(agent_id, tick, item_id)
 
     @server.tool()
@@ -205,25 +219,31 @@ def create_server(
         item_id: str | None = None,
     ) -> dict[str, Any]:
         """Drink from an adjacent fresh-water tile or from a waterskin."""
-        agent_id = _joined_agent(session)
-        if agent_id is None:
-            return _unauthorized(session)
+        agent_id = _guard(session, limiter, LimitKind.ACTION)
+        if isinstance(agent_id, dict):
+            return agent_id
+        if _text_too_long(item_id):
+            return _message_too_long(session)
         return session.drink(agent_id, tick, x=x, y=y, item_id=item_id)
 
     @server.tool()
     def iasim_fill(tick: int, item_id: str) -> dict[str, Any]:
         """Fill a waterskin from adjacent fresh water."""
-        agent_id = _joined_agent(session)
-        if agent_id is None:
-            return _unauthorized(session)
+        agent_id = _guard(session, limiter, LimitKind.ACTION)
+        if isinstance(agent_id, dict):
+            return agent_id
+        if _text_too_long(item_id):
+            return _message_too_long(session)
         return session.fill(agent_id, tick, item_id)
 
     @server.tool()
     def iasim_craft(tick: int, recipe_id: str) -> dict[str, Any]:
         """Craft one recipe when ingredients and station requirements are met."""
-        agent_id = _joined_agent(session)
-        if agent_id is None:
-            return _unauthorized(session)
+        agent_id = _guard(session, limiter, LimitKind.ACTION)
+        if isinstance(agent_id, dict):
+            return agent_id
+        if _text_too_long(recipe_id):
+            return _message_too_long(session)
         return session.craft(agent_id, tick, recipe_id)
 
     @server.tool()
@@ -234,9 +254,11 @@ def create_server(
         y: int,
     ) -> dict[str, Any]:
         """Build a fire, workbench, or shelter on an adjacent tile."""
-        agent_id = _joined_agent(session)
-        if agent_id is None:
-            return _unauthorized(session)
+        agent_id = _guard(session, limiter, LimitKind.ACTION)
+        if isinstance(agent_id, dict):
+            return agent_id
+        if _text_too_long(structure_id):
+            return _message_too_long(session)
         return session.build(agent_id, tick, structure_id, x, y)
 
     @server.tool()
@@ -249,9 +271,9 @@ def create_server(
         cost_usd: float | None = None,
     ) -> dict[str, Any]:
         """Report LLM token usage and model metadata for operator statistics."""
-        agent_id = _joined_agent(session)
-        if agent_id is None:
-            return _unauthorized(session)
+        agent_id = _guard(session, limiter, LimitKind.INFO)
+        if isinstance(agent_id, dict):
+            return agent_id
         return session.report_usage(
             agent_id,
             tick,
@@ -265,9 +287,9 @@ def create_server(
     @server.tool()
     def iasim_wait_for_tick(since_tick: int, timeout_ms: int = 1000) -> dict[str, Any]:
         """Wait until a tick newer than since_tick is available."""
-        agent_id = _joined_agent(session)
-        if agent_id is None:
-            return _unauthorized(session)
+        agent_id = _guard(session, limiter, LimitKind.INFO)
+        if isinstance(agent_id, dict):
+            return agent_id
         return session.wait_for_tick(agent_id, since_tick, timeout_ms)
 
     @server.custom_route("/healthz", methods=["GET"])  # type: ignore[untyped-decorator]
@@ -283,6 +305,47 @@ def _joined_agent(session: GameSession) -> AgentId | None:
     if access is None:
         return None
     return session.agent_for_token(access.token)
+
+
+def _guard(
+    session: GameSession,
+    limiter: RateLimiter,
+    kind: LimitKind,
+) -> AgentId | dict[str, Any]:
+    agent_id = _joined_agent(session)
+    if agent_id is None:
+        return _unauthorized(session)
+    if not limiter.allow(str(agent_id), kind):
+        return _rate_limited(session, kind)
+    return agent_id
+
+
+def _text_too_long(*values: str | None) -> bool:
+    return any(value is not None and len(value) > MAX_TEXT_FIELD_LENGTH for value in values)
+
+
+def _rate_limited(session: GameSession, kind: LimitKind) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "schema_version": SCHEMA_VERSION,
+        "tick": session.tick,
+        "error": {
+            "code": "RATE_LIMITED",
+            "message": f"{kind.value} rate limit exceeded; retry later",
+        },
+    }
+
+
+def _message_too_long(session: GameSession) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "schema_version": SCHEMA_VERSION,
+        "tick": session.tick,
+        "error": {
+            "code": "MESSAGE_TOO_LONG",
+            "message": f"text fields must be at most {MAX_TEXT_FIELD_LENGTH} characters",
+        },
+    }
 
 
 def _unauthorized(session: GameSession) -> dict[str, Any]:

@@ -281,6 +281,44 @@ class McpServerTests(unittest.TestCase):
             self.assertFalse(thread.is_alive())
             self.assertEqual(session.state.agents[0].position, Position(3, 2))
 
+    def test_http_message_limit_returns_structured_error(self) -> None:
+        session = GameSession(42, layout=_layout())
+        token = session.tokens[0]
+        _, app = create_app(session)
+        server, thread, port = _start_server(app)
+        try:
+
+            async def flow() -> None:
+                headers = {"Authorization": f"Bearer {token}"}
+                async with (
+                    create_mcp_http_client(headers=headers) as http_client,
+                    streamable_http_client(
+                        f"http://127.0.0.1:{port}/mcp",
+                        http_client=http_client,
+                    ) as (read_stream, write_stream),
+                    ClientSession(read_stream, write_stream) as client,
+                ):
+                    await client.initialize()
+                    joined = _data(await client.call_tool("iasim_join", {"name": "Nia"}))
+                    self.assertTrue(joined["ok"])
+
+                    too_long = _data(
+                        await client.call_tool(
+                            "iasim_sleep",
+                            {"tick": 0, "until": "x" * 281},
+                        )
+                    )
+                    self.assertFalse(too_long["ok"])
+                    self.assertEqual(too_long["error"]["code"], "MESSAGE_TOO_LONG")
+
+            asyncio.run(flow())
+        finally:
+            server.should_exit = True
+            server.force_exit = True
+            thread.join(timeout=10)
+
+        self.assertFalse(thread.is_alive())
+
     def test_loopback_connection_info_has_no_warning(self) -> None:
         info = server_connection_info("127.0.0.1", 8765)
 

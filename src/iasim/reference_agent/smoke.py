@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from typing import Any, Protocol
 
@@ -30,6 +31,8 @@ _DIRECTIONS: tuple[tuple[int, int], ...] = (
     (1, -1),
 )
 _TURN_ORDER = (0, 1, -1, 2, -2, 3, -3, 4)
+_RATE_LIMIT_RETRIES = 20
+_RATE_LIMIT_BACKOFF_SECONDS = 0.25
 _LAND_TILES = frozenset(
     {
         TileType.SAND,
@@ -78,9 +81,23 @@ class SmokeAgent:
         self._position = _position_from(result["spawn"])
         return self._agent_id
 
+    async def _call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        for attempt in range(_RATE_LIMIT_RETRIES):
+            result = _data(await self._client.call_tool(name, arguments))
+            error = result.get("error")
+            if not isinstance(error, dict) or error.get("code") != "RATE_LIMITED":
+                return result
+            if attempt + 1 < _RATE_LIMIT_RETRIES:
+                await asyncio.sleep(_RATE_LIMIT_BACKOFF_SECONDS)
+        raise RuntimeError(f"tool {name} remained rate limited")
+
     async def observe(self) -> dict[str, Any]:
         """Fetch the current observation."""
-        result = _data(await self._client.call_tool("iasim_observe", {}))
+        result = await self._call_tool("iasim_observe", {})
         if not result.get("ok", True):
             raise RuntimeError(f"observe failed: {result}")
         return result
@@ -92,14 +109,12 @@ class SmokeAgent:
         direction = self._choose_direction(observation)
         if direction is None:
             self._heading = (self._heading + 1) % 8
-            result = _data(await self._client.call_tool("iasim_wait", {"tick": tick}))
+            result = await self._call_tool("iasim_wait", {"tick": tick})
         else:
             dx, dy = direction
-            result = _data(
-                await self._client.call_tool(
-                    "iasim_move",
-                    {"tick": tick, "dx": dx, "dy": dy},
-                )
+            result = await self._call_tool(
+                "iasim_move",
+                {"tick": tick, "dx": dx, "dy": dy},
             )
         if not result.get("ok"):
             raise RuntimeError(f"action failed: {result}")
