@@ -1,0 +1,314 @@
+# MVP item, resource, and recipe catalog. Values follow SRS sections 3.6 and 3.7.
+
+[[items]]
+id = "wood"
+name = "Madera"
+weight_g = 1000
+stackable = true
+max_stack = 99
+kind = "resource"
+
+[[items]]
+id = "fiber"
+name = "Fibra"
+weight_g = 100
+stackable = true
+max_stack = 99
+kind = "resource"
+
+[[items]]
+id = "stone"
+name = "Piedra"
+weight_g = 800
+stackable = true
+max_stack = 99
+kind = "resource"
+
+[[items]]
+id = "berry"
+name = "Baya"
+weight_g = 50
+stackable = true
+max_stack = 99
+kind = "food"
+hunger_restore = 15
+
+[[items]]
+id = "coconut"
+name = "Coco"
+weight_g = 400
+stackable = true
+max_stack = 99
+kind = "food"
+hunger_restore = 8
+thirst_restore = 5
+
+[[items]]
+id = "reed"
+name = "Caña"
+weight_g = 200
+stackable = true
+max_stack = 99
+kind = "resource"
+
+[[items]]
+id = "clay"
+name = "Arcilla"
+weight_g = 500
+stackable = true
+max_stack = 99
+kind = "resource"
+
+[[items]]
+id = "sharp_stone"
+name = "Piedra afilada"
+weight_g = 300
+stackable = true
+max_stack = 99
+kind = "component"
+
+[[items]]
+id = "stone_spear"
+name = "Lanza de piedra"
+weight_g = 2000
+stackable = false
+kind = "weapon"
+equip_slot = "hand"
+weapon_damage = 7
+
+[[items]]
+id = "stone_axe"
+name = "Hacha de piedra"
+weight_g = 2000
+stackable = false
+kind = "tool"
+equip_slot = "hand"
+weapon_damage = 6
+tool_tags = ["axe"]
+
+[[items]]
+id = "stone_pick"
+name = "Pico de piedra"
+weight_g = 2000
+stackable = false
+kind = "tool"
+equip_slot = "hand"
+tool_tags = ["pick"]
+
+[[items]]
+id = "torch"
+name = "Antorcha"
+weight_g = 500
+stackable = false
+kind = "light"
+equip_slot = "light"
+light_radius = 3
+duration_ticks = 120
+
+[[items]]
+id = "bandage"
+name = "Venda"
+weight_g = 100
+stackable = true
+max_stack = 99
+kind = "consumable"
+stops_bleeding = true
+
+[[items]]
+id = "waterskin"
+name = "Odre"
+weight_g = 500
+stackable = false
+kind = "container"
+water_charges = 3
+
+[[items]]
+id = "backpack"
+name = "Mochila"
+weight_g = 1000
+stackable = false
+kind = "equipment"
+equip_slot = "back"
+bonus_slots = 6
+bonus_weight_g = 10000
+
+[[items]]
+id = "fiber_clothes"
+name = "Ropa de fibra"
+weight_g = 1000
+stackable = false
+kind = "equipment"
+equip_slot = "body"
+thermal_insulation = 1
+
+[[items]]
+id = "camp_kit"
+name = "Kit de campamento"
+weight_g = 3000
+stackable = false
+kind = "kit"
+structure = "fire"
+
+[[items]]
+id = "shelter_kit"
+name = "Kit de refugio"
+weight_g = 4000
+stackable = false
+kind = "kit"
+structure = "shelter"
+
+[[items]]
+id = "workbench_kit"
+name = "Kit de mesa"
+weight_g = 4000
+stackable = false
+kind = "kit"
+structure = "workbench"
+
+[[resources]]
+id = "tree_branches"
+tile = "tree"
+item = "wood"
+quantity = 1
+regenerates = true
+
+[[resources]]
+id = "tree_logs"
+tile = "tree"
+item = "wood"
+quantity = 3
+required_tool = "stone_axe"
+
+[[resources]]
+id = "palm_branches"
+tile = "palm"
+item = "wood"
+quantity = 1
+regenerates = true
+
+[[resources]]
+id = "palm_logs"
+tile = "palm"
+item = "wood"
+quantity = 3
+required_tool = "stone_axe"
+
+[[resources]]
+id = "palm_coconut"
+tile = "palm"
+item = "coconut"
+quantity = 1
+
+[[resources]]
+id = "bush_berries"
+tile = "bush"
+item = "berry"
+quantity = 2
+regenerates = true
+
+[[resources]]
+id = "tall_grass_fiber"
+tile = "tall_grass"
+item = "fiber"
+quantity = 1
+
+[[resources]]
+id = "tall_grass_reed"
+tile = "tall_grass"
+item = "reed"
+quantity = 1
+
+[[resources]]
+id = "rocky_ground_stone"
+tile = "rocky_ground"
+item = "stone"
+quantity = 1
+
+[[resources]]
+id = "rock_face_stone"
+tile = "rock"
+item = "stone"
+quantity = 3
+required_tool = "stone_pick"
+
+[[resources]]
+id = "river_clay"
+tile = "clay"
+item = "clay"
+quantity = 1
+
+[[recipes]]
+id = "sharp_stone"
+level = 1
+ingredients = { stone = 2 }
+output = "sharp_stone"
+
+[[recipes]]
+id = "bandage"
+level = 1
+ingredients = { fiber = 2 }
+output = "bandage"
+
+[[recipes]]
+id = "torch"
+level = 1
+ingredients = { wood = 1, fiber = 2 }
+output = "torch"
+
+[[recipes]]
+id = "stone_spear"
+level = 1
+ingredients = { wood = 1, sharp_stone = 1, fiber = 2 }
+output = "stone_spear"
+
+[[recipes]]
+id = "fiber_clothes"
+level = 1
+ingredients = { fiber = 4 }
+output = "fiber_clothes"
+
+[[recipes]]
+id = "waterskin"
+level = 1
+ingredients = { fiber = 3, clay = 2 }
+output = "waterskin"
+
+[[recipes]]
+id = "camp_kit"
+level = 1
+ingredients = { wood = 5, stone = 3 }
+output = "camp_kit"
+
+[[recipes]]
+id = "workbench_kit"
+level = 1
+ingredients = { wood = 6, stone = 4 }
+output = "workbench_kit"
+
+[[recipes]]
+id = "stone_axe"
+level = 2
+station = "workbench"
+ingredients = { wood = 1, stone = 2, sharp_stone = 1, fiber = 1 }
+output = "stone_axe"
+
+[[recipes]]
+id = "stone_pick"
+level = 2
+station = "workbench"
+ingredients = { wood = 1, stone = 3, fiber = 2 }
+output = "stone_pick"
+
+[[recipes]]
+id = "backpack"
+level = 2
+station = "workbench"
+ingredients = { fiber = 4, reed = 2 }
+output = "backpack"
+
+[[recipes]]
+id = "shelter_kit"
+level = 2
+station = "workbench"
+ingredients = { wood = 8, fiber = 6, reed = 4 }
+output = "shelter_kit"
