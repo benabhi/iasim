@@ -83,7 +83,7 @@ class GameSessionTests(unittest.TestCase):
         self.assertLessEqual(len(observation["perception"]["visible"]), 49)
         self.assertEqual(
             {action["action"] for action in observation["available_actions"]},
-            {"move", "wait", "gather", "pickup", "drop", "eat", "drink", "fill"},
+            {"move", "wait", "gather", "pickup", "drop", "eat", "drink", "fill", "craft"},
         )
 
     def test_move_advances_tick_and_updates_position(self) -> None:
@@ -156,6 +156,36 @@ class GameSessionTests(unittest.TestCase):
         self.assertEqual(observation["last_action_result"]["status"], "success")
         self.assertEqual(observation["inventory"]["items"], [])
         self.assertLess(observation["agent"]["hunger"], 1.0)
+
+    def test_craft_updates_inventory_and_reports_the_action(self) -> None:
+        catalog = load_catalog()
+        inventory = Inventory.for_strength(5).add_quantity(
+            catalog.item("stone").definition,
+            2,
+        )
+        session = _session(profiles=(AgentProfile(inventory=inventory),))
+        agent_id = _join(session, "Nia")["agent_id"]
+
+        result = session.craft(agent_id, 0, "sharp_stone")
+        observation = session.observe(agent_id)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(observation["last_action_result"]["action"], "craft")
+        self.assertEqual(observation["last_action_result"]["status"], "success")
+        self.assertIsNone(
+            next(
+                (item for item in observation["inventory"]["items"] if item["item_id"] == "stone"),
+                None,
+            )
+        )
+        self.assertEqual(
+            next(
+                item
+                for item in observation["inventory"]["items"]
+                if item["item_id"] == "sharp_stone"
+            )["qty"],
+            1,
+        )
 
     def test_blocked_move_is_reported_in_the_next_observation(self) -> None:
         session = _session(_layout(blocked=Position(3, 2)))

@@ -190,6 +190,14 @@ def create_server(
         return session.fill(agent_id, tick, item_id)
 
     @server.tool()
+    def iasim_craft(tick: int, recipe_id: str) -> dict[str, Any]:
+        """Craft one recipe when ingredients and station requirements are met."""
+        agent_id = _joined_agent(session)
+        if agent_id is None:
+            return _unauthorized(session)
+        return session.craft(agent_id, tick, recipe_id)
+
+    @server.tool()
     def iasim_wait_for_tick(since_tick: int, timeout_ms: int = 1000) -> dict[str, Any]:
         """Wait until a tick newer than since_tick is available."""
         agent_id = _joined_agent(session)

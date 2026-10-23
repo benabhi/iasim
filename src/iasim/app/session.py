@@ -17,6 +17,7 @@ from typing import Any
 from iasim.crafting import Catalog, load_catalog
 from iasim.domain.actions import Action, ActionKind
 from iasim.domain.agents import Agent, AgentProfile, AgentStatus
+from iasim.domain.crafting_actions import crafting_resolvers
 from iasim.domain.geometry import Position
 from iasim.domain.hashing import canonical_state_hash
 from iasim.domain.identifiers import AgentId
@@ -113,6 +114,7 @@ class GameSession:
         self._resolvers = {
             **movement_resolvers(),
             **item_action_resolvers(self._catalog),
+            **crafting_resolvers(self._catalog),
         }
         self._phase = SessionPhase.WAITING
         self._end_reason: SessionEndReason | None = None
@@ -399,6 +401,15 @@ class GameSession:
             (("item_id", item_id),),
         )
 
+    def craft(self, agent_id: str, tick: int, recipe_id: str) -> dict[str, Any]:
+        """Queue crafting one catalog recipe."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.CRAFT,
+            (("recipe_id", recipe_id),),
+        )
+
     def _queue(
         self,
         agent_id: str,
@@ -643,6 +654,7 @@ class GameSession:
                 "ate",
                 "drank",
                 "filled",
+                "crafted",
             }
             self._last_results[event.agent_id] = {
                 "tick": result.tick,
@@ -737,6 +749,7 @@ class GameSession:
                 {"action": "eat", "available": True},
                 {"action": "drink", "available": True},
                 {"action": "fill", "available": True},
+                {"action": "craft", "available": True},
             ],
         }
         last_result = self._last_results.get(agent.agent_id)

@@ -35,6 +35,7 @@ TOOL_NAMES = {
     "iasim_eat",
     "iasim_drink",
     "iasim_fill",
+    "iasim_craft",
     "iasim_wait_for_tick",
 }
 
@@ -217,6 +218,21 @@ class McpServerTests(unittest.TestCase):
                         self.assertEqual(
                             observation["last_action_result"]["outcome"],
                             "not_drinkable",
+                        )
+
+                        crafted = _data(
+                            await client.call_tool(
+                                "iasim_craft",
+                                {"tick": 4, "recipe_id": "sharp_stone"},
+                            )
+                        )
+                        self.assertTrue(crafted["ok"])
+                        observation = _data(await client.call_tool("iasim_observe", {}))
+                        self.assertEqual(observation["tick"], 5)
+                        self.assertEqual(observation["last_action_result"]["action"], "craft")
+                        self.assertEqual(
+                            observation["last_action_result"]["outcome"],
+                            "missing_ingredients",
                         )
 
                 asyncio.run(flow())
