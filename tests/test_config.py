@@ -25,6 +25,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.mcp.host, "127.0.0.1")
         self.assertEqual(config.mcp.port, 8765)
         self.assertEqual(config.ui.language, "es")
+        self.assertEqual(config.usage.pricing, {})
 
     def test_loopback_host_detection(self) -> None:
         for host in ("127.0.0.1", "127.0.0.42", "localhost", "::1"):
@@ -57,6 +58,10 @@ name = "test_island"
 [logs]
 snapshot_every_ticks = 25
 
+[usage.pricing."gpt-5"]
+input_per_million_usd = 1.25
+output_per_million_usd = 10.0
+
 [debug]
 enabled = true
 """,
@@ -71,6 +76,14 @@ enabled = true
         self.assertEqual(config.world.name, "test_island")
         self.assertEqual(config.logs.snapshot_every_ticks, 25)
         self.assertTrue(config.debug.enabled)
+        self.assertAlmostEqual(
+            config.usage.pricing["gpt-5"].input_per_million_usd,
+            1.25,
+        )
+        self.assertAlmostEqual(
+            config.usage.pricing["gpt-5"].output_per_million_usd,
+            10.0,
+        )
 
     def test_cli_overrides_take_precedence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -171,6 +184,23 @@ port = 8765
 
         self.assertIn("world.width", str(raised.exception))
         self.assertIn("80", str(raised.exception))
+
+    def test_usage_pricing_rejects_negative_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = self._write_config(
+                directory,
+                """
+[usage.pricing."gpt-5"]
+input_per_million_usd = -1.0
+output_per_million_usd = 1.0
+""",
+            )
+
+            with self.assertRaises(ConfigError) as raised:
+                load_config(path)
+
+        self.assertIn("usage.pricing", str(raised.exception))
+        self.assertIn("greater than or equal to 0", str(raised.exception))
 
 
 if __name__ == "__main__":

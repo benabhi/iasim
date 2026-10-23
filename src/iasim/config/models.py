@@ -139,6 +139,31 @@ class DebugConfig(StrictModel):
     confirm_destructive: bool = True
 
 
+class ModelPricingConfig(StrictModel):
+    """Optional USD price per million tokens for one model."""
+
+    input_per_million_usd: float = Field(ge=0, allow_inf_nan=False)
+    output_per_million_usd: float = Field(ge=0, allow_inf_nan=False)
+
+
+class UsageConfig(StrictModel):
+    """Agent-reported AI usage pricing settings."""
+
+    pricing: dict[str, ModelPricingConfig] = Field(default_factory=dict)
+
+    @field_validator("pricing")
+    @classmethod
+    def model_names_must_be_printable(
+        cls,
+        value: dict[str, ModelPricingConfig],
+    ) -> dict[str, ModelPricingConfig]:
+        """Reject empty or non-printable model keys used for lookup."""
+        for model in value:
+            if not model.strip() or any(not character.isprintable() for character in model):
+                raise ValueError("model names must be printable and non-empty")
+        return value
+
+
 class IasimConfig(StrictModel):
     """Complete validated IASim configuration."""
 
@@ -149,3 +174,4 @@ class IasimConfig(StrictModel):
     ui: UiConfig = Field(default_factory=UiConfig)
     logs: LogsConfig = Field(default_factory=LogsConfig)
     debug: DebugConfig = Field(default_factory=DebugConfig)
+    usage: UsageConfig = Field(default_factory=UsageConfig)

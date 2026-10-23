@@ -15,6 +15,7 @@ from typing import Any, NoReturn
 from iasim import MCP_PROTOCOL_VERSION, __version__
 from iasim.app.session import GameSession
 from iasim.config import ConfigError, IasimConfig, load_config
+from iasim.domain.usage import ModelPricing
 from iasim.errors import ExitCode, IasimError, PersistenceError
 from iasim.mcp.server import run_server
 
@@ -149,6 +150,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 token_path=run_dir / "agents.json",
                 weather_min_ticks=config.weather.weather_min_ticks,
                 weather_max_ticks=config.weather.weather_max_ticks,
+                usage_pricing=_usage_pricing(config),
             )
             run_server(session, host=config.mcp.host, port=config.mcp.port)
         except KeyboardInterrupt:
@@ -213,6 +215,16 @@ def _resolve_seed(config: IasimConfig) -> int:
     if config.game.seed is not None:
         return config.game.seed
     return secrets.randbits(63)
+
+
+def _usage_pricing(config: IasimConfig) -> dict[str, ModelPricing]:
+    return {
+        model: ModelPricing(
+            input_per_million_usd=price.input_per_million_usd,
+            output_per_million_usd=price.output_per_million_usd,
+        )
+        for model, price in config.usage.pricing.items()
+    }
 
 
 def _create_run_dir(config: IasimConfig, seed: int) -> Path:

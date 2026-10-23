@@ -14,6 +14,7 @@ from iasim.domain.identifiers import AgentId
 from iasim.domain.session import SessionState
 from iasim.domain.status import Condition, status_tags
 from iasim.domain.tiles import TileType
+from iasim.domain.usage import AgentUsage, CostSource
 from iasim.domain.world import StructureKind
 from iasim.ui import theme
 from iasim.ui.controls import KEY_GUIDE, STATUS_GUIDE
@@ -54,6 +55,13 @@ _STATUS_LABELS: dict[Condition, str] = {
     Condition.HEAT_STROKE: "GOLPE DE CALOR",
     Condition.WET: "MOJADO",
     Condition.DEAD: "MUERTO",
+}
+
+_COST_SOURCE_LABELS: dict[CostSource, str] = {
+    CostSource.REPORTED: "reportado",
+    CostSource.ESTIMATED: "estimado",
+    CostSource.MIXED: "mixto",
+    CostSource.UNKNOWN: "desconocido",
 }
 
 
@@ -187,6 +195,7 @@ def render_base_screen(
     capacity: int = 8,
     ascii_mode: bool = False,
     focus_mode: bool = False,
+    usage: Mapping[AgentId, AgentUsage] | None = None,
 ) -> BaseScreen:
     """Render the deterministic base screen without mutating the session."""
     canvas = _Canvas()
@@ -203,6 +212,7 @@ def render_base_screen(
         speed=speed,
         capacity=capacity,
         ascii_mode=ascii_mode,
+        usage=usage,
     )
     _render_bottom_bar(canvas, ascii_mode)
     return canvas.to_screen()
@@ -360,6 +370,7 @@ def _render_panel(
     speed: int,
     capacity: int,
     ascii_mode: bool,
+    usage: Mapping[AgentId, AgentUsage] | None,
 ) -> None:
     canvas.fill(
         PANEL_X,
@@ -497,7 +508,38 @@ def _render_panel(
     _panel(canvas, y, "MENTE (REPORTADO)", fg=theme.CYAN, bold=True)
     y += 1
     _panel(canvas, y, "— sin reporte —", fg=theme.DIM)
-    y += 2
+    y += 1
+
+    selected_usage = usage.get(selected.agent_id) if usage is not None else None
+    if selected_usage is not None and selected_usage.entries:
+        _panel(canvas, y, separator, fg=theme.DIM)
+        y += 1
+        _panel(canvas, y, "USO IA (REPORTADO)", fg=theme.CYAN, bold=True)
+        y += 1
+        visible_entries = list(reversed(selected_usage.entries[-3:]))
+        for entry in visible_entries:
+            effort = entry.reasoning_effort or "-"
+            _panel(
+                canvas,
+                y,
+                f"{entry.model} / {effort}: {entry.input_tokens} in / {entry.output_tokens} out",
+            )
+            y += 1
+        if len(selected_usage.entries) > len(visible_entries):
+            _panel(
+                canvas,
+                y,
+                f"... +{len(selected_usage.entries) - len(visible_entries)} combinaciones",
+                fg=theme.DIM,
+            )
+            y += 1
+        _panel(
+            canvas,
+            y,
+            f"TOTAL {selected_usage.total_tokens} tokens - {_usage_cost_text(selected_usage)}",
+        )
+        y += 1
+    y += 1
 
     _panel(canvas, y, separator, fg=theme.DIM)
     y += 1
@@ -593,6 +635,14 @@ def _agent_line(index: int, agent: Agent, name: str, ascii_mode: bool = False) -
 
 def _status_tags(agent: Agent) -> list[str]:
     return [_STATUS_LABELS[tag] for tag in status_tags(agent)]
+
+
+def _usage_cost_text(usage: AgentUsage) -> str:
+    if usage.cost_usd is None:
+        return "costo desconocido"
+    suffix = "" if usage.cost_complete else " + ?"
+    source = _COST_SOURCE_LABELS[usage.cost_source]
+    return f"USD {usage.cost_usd:.4f}{suffix} ({source})"
 
 
 def _bar(value: float, maximum: float, ascii_mode: bool = False) -> str:
