@@ -1,0 +1,16 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "iasim"
+version = "0.1.0"
+description = "Deterministic multi-agent survival simulation sandbox"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+iasim = "iasim.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/iasim"]
