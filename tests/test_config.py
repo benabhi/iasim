@@ -81,7 +81,7 @@ port = 8765
 
     def test_invalid_field_reports_file_key_and_expectation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            path = self._write_config(directory, "[game]\ntick_minutes = \"five\"\n")
+            path = self._write_config(directory, '[game]\ntick_minutes = "five"\n')
 
             with self.assertRaises(ConfigError) as raised:
                 load_config(path)
@@ -139,7 +139,7 @@ port = 8765
         with tempfile.TemporaryDirectory() as directory:
             path = self._write_config(
                 directory,
-                "[mcp]\nhost = \"0.0.0.0\"\ndev_open = true\n",
+                '[mcp]\nhost = "0.0.0.0"\ndev_open = true\n',
             )
 
             with self.assertRaises(ConfigError) as raised:

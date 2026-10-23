@@ -42,9 +42,7 @@ class GameConfig(StrictModel):
 
     @field_validator("max_agents")
     @classmethod
-    def max_agents_must_cover_min_agents(
-        cls, value: int, info: ValidationInfo
-    ) -> int:
+    def max_agents_must_cover_min_agents(cls, value: int, info: ValidationInfo) -> int:
         """Reject a maximum agent count below the configured minimum."""
         min_agents = info.data.get("min_agents")
         if isinstance(min_agents, int) and value < min_agents:
@@ -77,9 +75,7 @@ class WeatherConfig(StrictModel):
 
     @field_validator("weather_max_ticks")
     @classmethod
-    def max_weather_must_cover_min_weather(
-        cls, value: int, info: ValidationInfo
-    ) -> int:
+    def max_weather_must_cover_min_weather(cls, value: int, info: ValidationInfo) -> int:
         """Reject a maximum weather duration below the configured minimum."""
         min_ticks = info.data.get("weather_min_ticks")
         if isinstance(min_ticks, int) and value < min_ticks:
