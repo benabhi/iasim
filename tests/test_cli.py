@@ -59,6 +59,8 @@ class CliTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertEqual(event["event"], "session_started")
         self.assertEqual(event["seed"], 123)
+        self.assertEqual(event["iasim_version"], __version__)
+        self.assertEqual(event["mcp_protocol_version"], MCP_PROTOCOL_VERSION)
         self.assertIn("seed=123", output.getvalue())
         self.assertNotIn("token", log_text)
 
