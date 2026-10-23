@@ -6,9 +6,27 @@ import heapq
 from collections import deque
 from collections.abc import Iterator
 
+from iasim.domain.geometry import Position
 from iasim.domain.rng import U64_MASK, DeterministicRng, roll_d6
 from iasim.domain.tiles import TileType, WorldMap
-from iasim.errors import WorldGenerationError
+from iasim.errors import WorldGenerationError, WorldValidationError
+from iasim.world.layout import WorldLayout
+from iasim.world.rules import (
+    FOOD_SOURCES,
+    FRESH_WATER_SOURCES,
+    MAX_FRESH_WATER_DISTANCE,
+    MAX_RESOURCE_DISTANCE,
+    MIN_SPAWN_DISTANCE,
+    ROCK_SOURCES,
+    SPAWN_ALLOWED_TILES,
+    WATER_TILES,
+    WOOD_SOURCES,
+)
+from iasim.world.validation import (
+    largest_walkable_component,
+    resource_distances,
+    validate_layout,
+)
 
 WORLD_WIDTH = 80
 WORLD_HEIGHT = 40
@@ -23,8 +41,6 @@ _MOISTURE_STAGE = 0x3C4D5E6F708192A3
 _FEATURES_STAGE = 0x4D5E6F708192A3B4
 _BANKS_STAGE = 0x6F708192A3B4C5D6
 _RIVER_STAGE = 0x5E6F708192A3B4C5
-
-_WATER_TILES = frozenset({TileType.DEEP_WATER, TileType.SHALLOW_WATER, TileType.FRESH_WATER})
 
 _REQUIRED_TILES = frozenset(
     {
@@ -45,22 +61,99 @@ _REQUIRED_TILES = frozenset(
 
 
 def generate_world(seed: int) -> WorldMap:
-    """Generate the deterministic 80x40 island for ``seed``."""
+    """Generate the validated deterministic 80x40 island for ``seed``."""
+    return generate_layout(seed, agent_count=8).world
+
+
+def generate_layout(seed: int, agent_count: int = 8) -> WorldLayout:
+    """Generate a validated layout with ``agent_count`` spawn points."""
     if seed < 0:
         raise ValueError(f"seed must be non-negative, got {seed}")
+    if not 1 <= agent_count <= 8:
+        raise ValueError(f"agent_count must be within [1, 8], got {agent_count}")
 
+    last_error = "no valid map was produced"
     for attempt in range(_MAX_ATTEMPTS):
         derived_seed = seed if attempt == 0 else (seed + attempt * 0x9E3779B97F4A7C15) & U64_MASK
         tiles = _generate_once(derived_seed)
         if tiles is None:
+            last_error = "generation produced no land"
             continue
         if _land_percent(tiles) < _MIN_LAND_PERCENT:
+            last_error = "land share is below the minimum"
             continue
         _ensure_required_tiles(tiles)
-        if _REQUIRED_TILES.issubset(tiles):
-            return WorldMap(width=WORLD_WIDTH, height=WORLD_HEIGHT, tiles=tuple(tiles))
+        if not _REQUIRED_TILES.issubset(tiles):
+            last_error = "required tile types are missing"
+            continue
 
-    raise WorldGenerationError(f"could not generate a valid island for seed {seed}")
+        world = WorldMap(width=WORLD_WIDTH, height=WORLD_HEIGHT, tiles=tuple(tiles))
+        spawn_points = _select_spawn_points(world, agent_count)
+        if len(spawn_points) != agent_count:
+            last_error = f"only {len(spawn_points)} spawn points could be placed"
+            continue
+
+        layout = WorldLayout(seed=seed, world=world, spawn_points=spawn_points)
+        try:
+            validate_layout(layout)
+        except WorldValidationError as exc:
+            last_error = str(exc)
+            continue
+        return layout
+
+    raise WorldGenerationError(f"could not generate a valid island for seed {seed}: {last_error}")
+
+
+def _select_spawn_points(world: WorldMap, agent_count: int) -> tuple[Position, ...]:
+    """Select separated, connected, resource-reachable spawn points."""
+    component = largest_walkable_component(world)
+    water_distances = resource_distances(world, FRESH_WATER_SOURCES)
+    food_distances = resource_distances(world, FOOD_SOURCES)
+    wood_distances = resource_distances(world, WOOD_SOURCES)
+    rock_distances = resource_distances(world, ROCK_SOURCES)
+
+    candidates = [
+        index
+        for index, tile in enumerate(world.tiles)
+        if component[index]
+        and tile in SPAWN_ALLOWED_TILES
+        and water_distances[index] <= MAX_FRESH_WATER_DISTANCE
+        and food_distances[index] <= MAX_RESOURCE_DISTANCE
+        and wood_distances[index] <= MAX_RESOURCE_DISTANCE
+        and rock_distances[index] <= MAX_RESOURCE_DISTANCE
+    ]
+    if not candidates:
+        return ()
+
+    center_x = world.width // 2
+    center_y = world.height // 2
+    start = min(
+        candidates,
+        key=lambda index: (
+            abs(index % world.width - center_x) + abs(index // world.width - center_y),
+            index,
+        ),
+    )
+    selected = [start]
+    while len(selected) < agent_count:
+        best = -1
+        best_distance = -1
+        for index in candidates:
+            if index in selected:
+                continue
+            nearest = min(
+                abs(index % world.width - other % world.width)
+                + abs(index // world.width - other // world.width)
+                for other in selected
+            )
+            if nearest > best_distance or (nearest == best_distance and (best < 0 or index < best)):
+                best = index
+                best_distance = nearest
+        if best < 0 or best_distance < MIN_SPAWN_DISTANCE:
+            break
+        selected.append(best)
+
+    return tuple(Position(index % world.width, index // world.width) for index in selected)
 
 
 def _generate_once(seed: int) -> list[TileType] | None:
@@ -237,13 +330,13 @@ def _carve_river(tiles: list[TileType], scores: list[int], seed: int) -> None:
         cost, current = heapq.heappop(heap)
         if cost != distances[current]:
             continue
-        if tiles[current] in _WATER_TILES:
+        if tiles[current] in WATER_TILES:
             target = current
             break
         y, x = divmod(current, WORLD_WIDTH)
         for nx, ny in _neighbours(x, y):
             neighbour = ny * WORLD_WIDTH + nx
-            if tiles[neighbour] in _WATER_TILES:
+            if tiles[neighbour] in WATER_TILES:
                 step = 0
             else:
                 jitter = roll_d6(seed ^ _RIVER_STAGE, neighbour, 0)
@@ -267,7 +360,7 @@ def _carve_river(tiles: list[TileType], scores: list[int], seed: int) -> None:
     path.reverse()
 
     for index in path:
-        if tiles[index] not in _WATER_TILES:
+        if tiles[index] not in WATER_TILES:
             tiles[index] = TileType.FRESH_WATER
 
 
@@ -369,7 +462,7 @@ def _distance_to_water(tiles: list[TileType]) -> list[int]:
     distance = [size] * size
     queue: deque[int] = deque()
     for index, tile in enumerate(tiles):
-        if tile in _WATER_TILES:
+        if tile in WATER_TILES:
             distance[index] = 0
             queue.append(index)
     while queue:
@@ -385,7 +478,7 @@ def _distance_to_water(tiles: list[TileType]) -> list[int]:
 
 def _land_percent(tiles: list[TileType]) -> int:
     """Return the percentage of cells that are not water."""
-    land = sum(1 for tile in tiles if tile not in _WATER_TILES)
+    land = sum(1 for tile in tiles if tile not in WATER_TILES)
     return land * 100 // (WORLD_WIDTH * WORLD_HEIGHT)
 
 

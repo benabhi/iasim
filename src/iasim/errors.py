@@ -34,6 +34,10 @@ class WorldGenerationError(IasimError):
     exit_code = ExitCode.WORLD_GENERATION
 
 
+class WorldValidationError(WorldGenerationError):
+    """A generated map failed the SRS validation rules."""
+
+
 class McpError(IasimError):
     """The MCP transport could not start or failed fatally."""
 
