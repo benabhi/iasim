@@ -17,6 +17,7 @@ from typing import Any
 from iasim.crafting import Catalog, load_catalog
 from iasim.domain.actions import Action, ActionKind
 from iasim.domain.agents import Agent, AgentProfile, AgentStatus
+from iasim.domain.climate import apply_climate_tick, effective_vision
 from iasim.domain.construction import advance_fires, construction_resolvers
 from iasim.domain.crafting_actions import crafting_resolvers
 from iasim.domain.geometry import Position
@@ -761,7 +762,12 @@ class GameSession:
                 "strength": attributes.strength,
                 "dexterity": attributes.dexterity,
                 "endurance": attributes.endurance,
-                "effective_vision": agent.effective_vision,
+                "effective_vision": effective_vision(
+                    agent,
+                    clock,
+                    self._state.weather,
+                    self._state.structures,
+                ),
                 "carry_kg": inventory.total_weight_grams / 1000.0,
                 "carry_capacity_kg": agent.carry_capacity_grams / 1000.0,
                 "equipment": {slot.value: spec.item_id for slot, spec in agent.equipment.items},
@@ -831,6 +837,7 @@ class GameSession:
         state = replace(state, weather=weather, rng_state=rng_state)
         state = apply_weather_wetness(state)
         state = advance_fires(state)
+        state = apply_climate_tick(state, self._engine.clock)
         return apply_needs_tick(
             state,
             resolved_actions,
