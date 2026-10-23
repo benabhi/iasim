@@ -227,6 +227,16 @@ def create_server(
         return session.drink(agent_id, tick, x=x, y=y, item_id=item_id)
 
     @server.tool()
+    def iasim_use(tick: int, item_id: str) -> dict[str, Any]:
+        """Use a consumable such as a bandage from the inventory."""
+        agent_id = _guard(session, limiter, LimitKind.ACTION)
+        if isinstance(agent_id, dict):
+            return agent_id
+        if _text_too_long(item_id):
+            return _message_too_long(session)
+        return session.use_item(agent_id, tick, item_id)
+
+    @server.tool()
     def iasim_fill(tick: int, item_id: str) -> dict[str, Any]:
         """Fill a waterskin from adjacent fresh water."""
         agent_id = _guard(session, limiter, LimitKind.ACTION)
@@ -280,6 +290,16 @@ def create_server(
         if _text_too_long(target_id):
             return _message_too_long(session)
         return session.attack(agent_id, tick, target_id)
+
+    @server.tool()
+    def iasim_flee(tick: int, target_id: str) -> dict[str, Any]:
+        """Flee up to two cells away from a living target."""
+        agent_id = _guard(session, limiter, LimitKind.ACTION)
+        if isinstance(agent_id, dict):
+            return agent_id
+        if _text_too_long(target_id):
+            return _message_too_long(session)
+        return session.flee(agent_id, tick, target_id)
 
     @server.tool()
     def iasim_loot(tick: int, corpse_id: str) -> dict[str, Any]:

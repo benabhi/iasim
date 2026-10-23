@@ -55,6 +55,7 @@ _STATUS_LABELS: dict[Condition, str] = {
     Condition.HYPOTHERMIA: "HIPOTERMIA",
     Condition.HEAT_STROKE: "GOLPE DE CALOR",
     Condition.WET: "MOJADO",
+    Condition.BLEEDING: "SANGRANDO",
     Condition.DEAD: "MUERTO",
 }
 

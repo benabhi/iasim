@@ -21,6 +21,7 @@ DEHYDRATION_DAMAGE_CENTI = 40
 HYPOTHERMIA_DAMAGE_CENTI = 20
 HEAT_STROKE_DAMAGE_CENTI = 30
 HEAT_STROKE_ENERGY_DAMAGE_CENTI = 20
+BLEEDING_DAMAGE_CENTI = 20
 
 
 class Condition(StrEnum):
@@ -34,6 +35,7 @@ class Condition(StrEnum):
     HYPOTHERMIA = "hypothermia"
     HEAT_STROKE = "heat_stroke"
     WET = "wet"
+    BLEEDING = "bleeding"
     DEAD = "dead"
 
 
@@ -57,6 +59,8 @@ def status_tags(agent: Agent) -> tuple[Condition, ...]:
         tags.append(Condition.HEAT_STROKE)
     if attributes.wetness_centi > WET_THRESHOLD_CENTI:
         tags.append(Condition.WET)
+    if agent.bleeding:
+        tags.append(Condition.BLEEDING)
     if agent.status is AgentStatus.DEAD:
         tags.append(Condition.DEAD)
     return tuple(tags)
@@ -124,6 +128,8 @@ def apply_status_tick(state: SessionState) -> SessionState:
             agents.append(agent)
             continue
         damage = health_damage_centi(agent.attributes)
+        if agent.bleeding:
+            damage += BLEEDING_DAMAGE_CENTI
         energy_damage = energy_damage_centi(agent.attributes)
         health = max(0, agent.attributes.health_centi - damage)
         energy = max(0, agent.attributes.energy_centi - energy_damage)

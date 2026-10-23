@@ -34,6 +34,7 @@ STATUS_GUIDE: tuple[tuple[str, str], ...] = (
     ("SED", "sed alta"),
     ("AGOTADO", "energía baja"),
     ("MOJADO", "mojadura alta"),
+    ("SANGRANDO", "herida que causa daño por tick"),
     ("FRÍO", "temperatura corporal baja"),
     ("CALOR", "temperatura corporal alta"),
     ("MUERTO", "agente sin vida"),

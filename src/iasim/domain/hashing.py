@@ -99,6 +99,7 @@ def _agent_payload(agent: Agent) -> dict[str, Any]:
         "y": agent.position.y,
         "status": agent.status.value,
         "sleep_until_tick": agent.sleep_until_tick,
+        "bleeding": agent.bleeding,
         "memory": _memory_payload(agent),
         "attributes": {
             "health_centi": agent.attributes.health_centi,
