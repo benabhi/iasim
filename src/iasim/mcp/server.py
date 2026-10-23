@@ -132,6 +132,64 @@ def create_server(
         return session.wait(agent_id, tick)
 
     @server.tool()
+    def iasim_gather(tick: int, x: int, y: int) -> dict[str, Any]:
+        """Gather a resource from an adjacent tile."""
+        agent_id = _joined_agent(session)
+        if agent_id is None:
+            return _unauthorized(session)
+        return session.gather(agent_id, tick, x, y)
+
+    @server.tool()
+    def iasim_pickup(
+        tick: int,
+        x: int,
+        y: int,
+        item_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Pick up a ground item from the current or an adjacent tile."""
+        agent_id = _joined_agent(session)
+        if agent_id is None:
+            return _unauthorized(session)
+        return session.pickup(agent_id, tick, x, y, item_id)
+
+    @server.tool()
+    def iasim_drop(tick: int, item_id: str, qty: int = 1) -> dict[str, Any]:
+        """Drop one or more units of an inventory item."""
+        agent_id = _joined_agent(session)
+        if agent_id is None:
+            return _unauthorized(session)
+        return session.drop(agent_id, tick, item_id, qty)
+
+    @server.tool()
+    def iasim_eat(tick: int, item_id: str) -> dict[str, Any]:
+        """Eat one unit of food from the inventory."""
+        agent_id = _joined_agent(session)
+        if agent_id is None:
+            return _unauthorized(session)
+        return session.eat(agent_id, tick, item_id)
+
+    @server.tool()
+    def iasim_drink(
+        tick: int,
+        x: int | None = None,
+        y: int | None = None,
+        item_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Drink from an adjacent fresh-water tile or from a waterskin."""
+        agent_id = _joined_agent(session)
+        if agent_id is None:
+            return _unauthorized(session)
+        return session.drink(agent_id, tick, x=x, y=y, item_id=item_id)
+
+    @server.tool()
+    def iasim_fill(tick: int, item_id: str) -> dict[str, Any]:
+        """Fill a waterskin from adjacent fresh water."""
+        agent_id = _joined_agent(session)
+        if agent_id is None:
+            return _unauthorized(session)
+        return session.fill(agent_id, tick, item_id)
+
+    @server.tool()
     def iasim_wait_for_tick(since_tick: int, timeout_ms: int = 1000) -> dict[str, Any]:
         """Wait until a tick newer than since_tick is available."""
         agent_id = _joined_agent(session)

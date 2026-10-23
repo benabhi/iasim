@@ -14,11 +14,13 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from iasim.crafting import Catalog, load_catalog
 from iasim.domain.actions import Action, ActionKind
 from iasim.domain.agents import Agent, AgentProfile, AgentStatus
 from iasim.domain.geometry import Position
 from iasim.domain.hashing import canonical_state_hash
 from iasim.domain.identifiers import AgentId
+from iasim.domain.item_actions import item_action_resolvers
 from iasim.domain.items import GroundItem, ItemStack
 from iasim.domain.movement import movement_resolvers
 from iasim.domain.needs import apply_needs_tick
@@ -68,6 +70,7 @@ class GameSession:
         layout: WorldLayout | None = None,
         profiles: Sequence[AgentProfile] | None = None,
         token_path: Path | None = None,
+        catalog: Catalog | None = None,
     ) -> None:
         if seed < 0:
             raise ValueError(f"seed must be non-negative, got {seed}")
@@ -106,6 +109,11 @@ class GameSession:
         self._turn_timeout_ms = turn_timeout_ms
         self._max_agents = configured_max
         self._token_path = token_path
+        self._catalog = catalog if catalog is not None else load_catalog()
+        self._resolvers = {
+            **movement_resolvers(),
+            **item_action_resolvers(self._catalog),
+        }
         self._phase = SessionPhase.WAITING
         self._end_reason: SessionEndReason | None = None
         self._final_state_hash: str | None = None
@@ -118,7 +126,7 @@ class GameSession:
         )
         self._engine = TurnEngine(
             self._state,
-            resolvers=movement_resolvers(),
+            resolvers=self._resolvers,
             tick_effect=self._apply_tick_effects,
         )
         self._names: dict[AgentId, str] = {}
@@ -240,7 +248,7 @@ class GameSession:
             self._state = replace(self._state, agents=(*self._state.agents, agent))
             self._engine = TurnEngine(
                 self._state,
-                resolvers=movement_resolvers(),
+                resolvers=self._resolvers,
                 tick_effect=self._apply_tick_effects,
                 clock=self._engine.clock,
             )
@@ -310,25 +318,98 @@ class GameSession:
 
     def move(self, agent_id: str, tick: int, dx: int, dy: int) -> dict[str, Any]:
         """Queue one primary move action for the current tick."""
-        if AgentId(agent_id) not in self._names:
-            return self._error("NOT_YOUR_TURN", "agent is not joined")
-        try:
-            action = Action(
-                AgentId(agent_id),
-                tick,
-                ActionKind.MOVE,
-                (("dx", dx), ("dy", dy)),
-            )
-        except ValueError as exc:
-            return self._error("INVALID_TICK", str(exc), tick=tick)
-        return self._submit(agent_id, action)
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.MOVE,
+            (("dx", dx), ("dy", dy)),
+        )
 
     def wait(self, agent_id: str, tick: int) -> dict[str, Any]:
         """Queue one primary wait action for the current tick."""
+        return self._queue(agent_id, tick, ActionKind.WAIT)
+
+    def gather(self, agent_id: str, tick: int, x: int, y: int) -> dict[str, Any]:
+        """Queue a gather action on one adjacent resource tile."""
+        return self._queue(agent_id, tick, ActionKind.GATHER, (("x", x), ("y", y)))
+
+    def pickup(
+        self,
+        agent_id: str,
+        tick: int,
+        x: int,
+        y: int,
+        item_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Queue a ground-item pickup from the current or an adjacent tile."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.PICKUP,
+            (("x", x), ("y", y), ("item_id", item_id)),
+        )
+
+    def drop(
+        self,
+        agent_id: str,
+        tick: int,
+        item_id: str,
+        qty: int = 1,
+    ) -> dict[str, Any]:
+        """Queue dropping one or more units of an inventory item."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.DROP,
+            (("item_id", item_id), ("qty", qty)),
+        )
+
+    def eat(self, agent_id: str, tick: int, item_id: str) -> dict[str, Any]:
+        """Queue consuming one unit of food from the inventory."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.EAT,
+            (("item_id", item_id),),
+        )
+
+    def drink(
+        self,
+        agent_id: str,
+        tick: int,
+        *,
+        x: int | None = None,
+        y: int | None = None,
+        item_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Queue drinking from an adjacent source or from a waterskin."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.DRINK,
+            (("x", x), ("y", y), ("item_id", item_id)),
+        )
+
+    def fill(self, agent_id: str, tick: int, item_id: str) -> dict[str, Any]:
+        """Queue filling a waterskin from adjacent fresh water."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.FILL,
+            (("item_id", item_id),),
+        )
+
+    def _queue(
+        self,
+        agent_id: str,
+        tick: int,
+        kind: ActionKind,
+        payload: tuple[tuple[str, object], ...] = (),
+    ) -> dict[str, Any]:
         if AgentId(agent_id) not in self._names:
             return self._error("NOT_YOUR_TURN", "agent is not joined")
         try:
-            action = Action(AgentId(agent_id), tick, ActionKind.WAIT)
+            action = Action(AgentId(agent_id), tick, kind, payload)
         except ValueError as exc:
             return self._error("INVALID_TICK", str(exc), tick=tick)
         return self._submit(agent_id, action)
@@ -406,6 +487,7 @@ class GameSession:
                 layout=layout,
                 profiles=self._profiles,
                 token_path=self._token_path,
+                catalog=self._catalog,
             )
 
     def health(self) -> dict[str, Any]:
@@ -552,7 +634,16 @@ class GameSession:
 
     def _record_result(self, result: TurnResult) -> None:
         for event in result.events:
-            success = event.outcome in {"moved", "waited"}
+            success = event.outcome in {
+                "moved",
+                "waited",
+                "gathered",
+                "picked_up",
+                "dropped",
+                "ate",
+                "drank",
+                "filled",
+            }
             self._last_results[event.agent_id] = {
                 "tick": result.tick,
                 "action": event.kind.value,
@@ -631,6 +722,7 @@ class GameSession:
                     {
                         "item_id": stack.definition.item_id,
                         "qty": stack.quantity,
+                        "charges": stack.charges,
                         "weight_kg": stack.total_weight_grams / 1000.0,
                     }
                     for stack in inventory.stacks
@@ -639,6 +731,12 @@ class GameSession:
             "available_actions": [
                 {"action": "move", "available": True},
                 {"action": "wait", "available": True},
+                {"action": "gather", "available": True},
+                {"action": "pickup", "available": True},
+                {"action": "drop", "available": True},
+                {"action": "eat", "available": True},
+                {"action": "drink", "available": True},
+                {"action": "fill", "available": True},
             ],
         }
         last_result = self._last_results.get(agent.agent_id)

@@ -62,6 +62,7 @@ def canonical_state_payload(state: SessionState) -> dict[str, Any]:
                     item.stack.definition.stackable,
                     item.stack.definition.max_stack,
                     item.stack.quantity,
+                    item.stack.charges,
                 ),
             )
         ],
@@ -111,6 +112,7 @@ def _stack_payload(stack: ItemStack) -> dict[str, Any]:
         "stackable": stack.definition.stackable,
         "max_stack": stack.definition.max_stack,
         "quantity": stack.quantity,
+        "charges": stack.charges,
     }
 
 

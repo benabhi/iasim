@@ -69,6 +69,7 @@ class ItemStack:
 
     definition: ItemDefinition
     quantity: int
+    charges: int = 0
 
     def __post_init__(self) -> None:
         if self.quantity < 1:
@@ -79,11 +80,21 @@ class ItemStack:
             raise ValueError(
                 f"quantity {self.quantity} exceeds max_stack {self.definition.max_stack}"
             )
+        if type(self.charges) is not int:
+            raise ValueError(f"charges must be an integer, got {self.charges!r}")
+        if self.charges < 0:
+            raise ValueError(f"charges must be non-negative, got {self.charges}")
+        if self.definition.stackable and self.charges:
+            raise ValueError("stackable items cannot carry per-instance charges")
 
     @property
     def total_weight_grams(self) -> int:
         """Return the stack weight in grams."""
         return self.definition.unit_weight_grams * self.quantity
+
+    def with_charges(self, charges: int) -> ItemStack:
+        """Return this stack with a new per-instance charge count."""
+        return replace(self, charges=charges)
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,13 +224,17 @@ class Inventory:
                 raise InventoryError(
                     f"item {stack.definition.item_id!r} already has a different definition"
                 )
+            if existing.charges != stack.charges:
+                raise InventoryError(
+                    f"cannot merge {stack.definition.item_id!r} stacks with different charges"
+                )
             quantity = existing.quantity + stack.quantity
             if quantity > existing.definition.max_stack:
                 raise InventoryError(
                     f"stack for {stack.definition.item_id!r} would exceed "
                     f"max_stack {existing.definition.max_stack}"
                 )
-            merged = ItemStack(existing.definition, quantity)
+            merged = ItemStack(existing.definition, quantity, charges=existing.charges)
             new_stacks = tuple(
                 merged if current is existing else current for current in self.stacks
             )
@@ -256,7 +271,11 @@ class Inventory:
         if quantity == existing.quantity:
             new_stacks = tuple(stack for stack in self.stacks if stack is not existing)
         else:
-            replacement = ItemStack(existing.definition, existing.quantity - quantity)
+            replacement = ItemStack(
+                existing.definition,
+                existing.quantity - quantity,
+                charges=existing.charges,
+            )
             new_stacks = tuple(replacement if stack is existing else stack for stack in self.stacks)
         return replace(self, stacks=new_stacks)
 
@@ -282,7 +301,7 @@ class Inventory:
                 f"cannot transfer {quantity} of {item_id!r}; only {existing.quantity} available"
             )
         source = self.remove(item_id, quantity)
-        destination = target.add(ItemStack(existing.definition, quantity))
+        destination = target.add(ItemStack(existing.definition, quantity, charges=existing.charges))
         return source, destination
 
     @staticmethod

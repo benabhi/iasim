@@ -13,6 +13,11 @@ _CENTI = 100
 _ACTIVITY_FACTORS: dict[ActionKind, int] = {
     ActionKind.MOVE: 1000,
     ActionKind.GATHER: 1200,
+    ActionKind.PICKUP: 1000,
+    ActionKind.DROP: 1000,
+    ActionKind.EAT: 500,
+    ActionKind.DRINK: 500,
+    ActionKind.FILL: 1000,
     ActionKind.CRAFT: 1200,
     ActionKind.BUILD: 1200,
     ActionKind.USE_ITEM: 1200,

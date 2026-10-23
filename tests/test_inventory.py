@@ -71,6 +71,22 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(new_target.stack_for("berry").quantity, 2)
         self.assertEqual(source.stack_for("berry").quantity, 3)
 
+    def test_waterskin_charges_survive_transfers_and_stack_removal(self) -> None:
+        waterskin = ItemStack(self._item("waterskin"), 1, charges=2)
+        source = Inventory.for_strength(5).add(waterskin)
+        target = Inventory.for_strength(5)
+
+        new_source, new_target = source.transfer_to(target, "waterskin", 1)
+
+        self.assertTrue(new_source.is_empty)
+        self.assertEqual(new_target.stack_for("waterskin").charges, 2)
+        _, removed = new_target.remove_stack("waterskin")
+        self.assertEqual(removed.charges, 2)
+
+    def test_stackable_items_cannot_carry_charges(self) -> None:
+        with self.assertRaises(ValueError):
+            ItemStack(self._item("berry"), 1, charges=1)
+
     def test_failed_transfer_leaves_both_sides_unchanged(self) -> None:
         wood = self._item("wood")
         source = Inventory.for_strength(5).add_quantity(wood, 2)

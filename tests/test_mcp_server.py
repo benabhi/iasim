@@ -29,6 +29,12 @@ TOOL_NAMES = {
     "iasim_observe",
     "iasim_move",
     "iasim_wait",
+    "iasim_gather",
+    "iasim_pickup",
+    "iasim_drop",
+    "iasim_eat",
+    "iasim_drink",
+    "iasim_fill",
     "iasim_wait_for_tick",
 }
 
@@ -181,6 +187,37 @@ class McpServerTests(unittest.TestCase):
                         )
                         self.assertFalse(timed_out["ok"])
                         self.assertEqual(timed_out["error"]["code"], "NO_NEW_TICK")
+
+                        eaten = _data(
+                            await client.call_tool(
+                                "iasim_eat",
+                                {"tick": 2, "item_id": "berry"},
+                            )
+                        )
+                        self.assertTrue(eaten["ok"])
+                        observation = _data(await client.call_tool("iasim_observe", {}))
+                        self.assertEqual(observation["tick"], 3)
+                        self.assertEqual(observation["last_action_result"]["action"], "eat")
+                        self.assertEqual(observation["last_action_result"]["status"], "rejected")
+                        self.assertEqual(
+                            observation["last_action_result"]["outcome"],
+                            "missing_item",
+                        )
+
+                        drunk = _data(
+                            await client.call_tool(
+                                "iasim_drink",
+                                {"tick": 3, "x": 2, "y": 2},
+                            )
+                        )
+                        self.assertTrue(drunk["ok"])
+                        observation = _data(await client.call_tool("iasim_observe", {}))
+                        self.assertEqual(observation["tick"], 4)
+                        self.assertEqual(observation["last_action_result"]["action"], "drink")
+                        self.assertEqual(
+                            observation["last_action_result"]["outcome"],
+                            "not_drinkable",
+                        )
 
                 asyncio.run(flow())
             finally:
