@@ -7,7 +7,9 @@ from enum import StrEnum
 
 from iasim.domain.actions import Action, ActionKind
 from iasim.domain.agents import Agent, AgentStatus
+from iasim.domain.corpse import Corpse
 from iasim.domain.identifiers import AgentId
+from iasim.domain.items import Equipment, Inventory
 from iasim.domain.rng import DeterministicRng
 from iasim.domain.session import SessionState
 from iasim.domain.status import dexterity_penalty, strength_penalty
@@ -90,17 +92,31 @@ def resolve_attack(
     updated_target = replace(
         target,
         attributes=attributes,
+        inventory=Inventory.for_strength(target.attributes.strength) if dead else target.inventory,
+        equipment=Equipment() if dead else target.equipment,
         status=AgentStatus.DEAD if dead else target.status,
         sleep_until_tick=None if dead else target.sleep_until_tick,
     )
     updated_agents = tuple(
         updated_target if agent.agent_id == target.agent_id else agent for agent in state.agents
     )
+    corpses = state.corpses
+    if dead:
+        corpses = (
+            *corpses,
+            Corpse.from_agent(
+                target,
+                tick=action.tick,
+                cause="attack",
+                killer_id=attacker.agent_id,
+            ),
+        )
     outcome = CombatOutcome.KILLED if dead else CombatOutcome.HIT
     return (
         replace(
             state,
             agents=updated_agents,
+            corpses=corpses,
             rng_state=rng.state,
         ),
         (_event(action, outcome),),

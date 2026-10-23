@@ -282,6 +282,16 @@ def create_server(
         return session.attack(agent_id, tick, target_id)
 
     @server.tool()
+    def iasim_loot(tick: int, corpse_id: str) -> dict[str, Any]:
+        """Loot all remaining items from an adjacent corpse."""
+        agent_id = _guard(session, limiter, LimitKind.ACTION)
+        if isinstance(agent_id, dict):
+            return agent_id
+        if _text_too_long(corpse_id):
+            return _message_too_long(session)
+        return session.loot(agent_id, tick, corpse_id)
+
+    @server.tool()
     def iasim_report_mind(
         tick: int,
         intent: str,
