@@ -20,6 +20,7 @@ from iasim.domain.agents import Agent, AgentProfile, AgentStatus
 from iasim.domain.climate import apply_climate_tick, effective_vision
 from iasim.domain.construction import advance_fires, construction_resolvers
 from iasim.domain.crafting_actions import crafting_resolvers
+from iasim.domain.geometry import Position
 from iasim.domain.hashing import canonical_state_hash
 from iasim.domain.identifiers import AgentId
 from iasim.domain.item_actions import item_action_resolvers
@@ -59,6 +60,15 @@ SCHEMA_VERSION = "1.0"
 MAX_NAME_LENGTH = 40
 DEFAULT_TURN_TIMEOUT_MS = 60_000
 MAX_AGENTS = 8
+
+
+def _health_band(health: float) -> str:
+    """Return a coarse health band for perception-limited observations."""
+    if health >= 70:
+        return "healthy"
+    if health >= 40:
+        return "hurt"
+    return "critical"
 
 
 class SessionPhase(StrEnum):
@@ -770,16 +780,64 @@ class GameSession:
             agent.position,
             vision_radius,
         )
-        visible = [
-            {
-                "x": position.x,
-                "y": position.y,
-                "tile": self._state.world.tile_at(position).value,
-            }
-            for position in sorted(
-                visible_positions,
-                key=lambda position: (position.y, position.x),
+        ground_items_by_position: dict[Position, list[GroundItem]] = {}
+        for ground in self._state.ground_items:
+            ground_items_by_position.setdefault(ground.position, []).append(ground)
+        structures_by_position = {
+            structure.position: structure for structure in self._state.structures
+        }
+        visible = []
+        for position in sorted(
+            visible_positions,
+            key=lambda item: (item.y, item.x),
+        ):
+            tile = self._state.world.tile_at(position)
+            resources = [
+                resource.resource_id for resource in self._catalog.resources_for_tile(tile)
+            ]
+            entities: list[dict[str, Any]] = []
+            for ground in ground_items_by_position.get(position, ()):
+                entities.append(
+                    {
+                        "type": "item",
+                        "item_id": ground.stack.definition.item_id,
+                        "qty": ground.stack.quantity,
+                        "charges": ground.stack.charges,
+                    }
+                )
+            structure = structures_by_position.get(position)
+            if structure is not None:
+                entities.append({"type": "structure", "kind": structure.kind.value})
+            visible.append(
+                {
+                    "x": position.x,
+                    "y": position.y,
+                    "tile": tile.value,
+                    "glyph": tile.glyph,
+                    "resource": resources[0] if resources else None,
+                    "resources": resources,
+                    "entities": entities,
+                }
             )
+        visible_agents = [
+            {
+                "id": other.agent_id,
+                "name": self._names[other.agent_id],
+                "pos": [other.position.x, other.position.y],
+                "health_band": _health_band(other.attributes.health),
+                "equipment_visible": [
+                    spec.item_id
+                    for _, spec in sorted(
+                        other.equipment.items,
+                        key=lambda item: item[0].value,
+                    )
+                ],
+                "relation": "neutral",
+            }
+            for other in sorted(self._state.agents, key=lambda item: item.agent_id)
+            if other.agent_id != agent.agent_id
+            and other.is_alive
+            and other.position in visible_positions
         ]
         observation: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
@@ -849,7 +907,7 @@ class GameSession:
                     }
                     for entry in agent.memory.agents
                 ],
-                "agents": [],
+                "agents": visible_agents,
                 "messages": [],
             },
             "inventory": {
