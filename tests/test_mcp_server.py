@@ -40,6 +40,7 @@ TOOL_NAMES = {
     "iasim_fill",
     "iasim_craft",
     "iasim_build",
+    "iasim_attack",
     "iasim_say",
     "iasim_report_mind",
     "iasim_report_usage",
