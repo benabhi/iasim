@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 
 from iasim.domain.agents import Agent
 from iasim.domain.items import GroundItem
+from iasim.domain.resources import ResourceNode
 from iasim.domain.rng import U64_MASK
 from iasim.domain.tiles import WorldMap
 from iasim.domain.weather import WeatherState
@@ -25,6 +26,7 @@ class SessionState:
     structures: tuple[Structure, ...] = ()
     ground_items: tuple[GroundItem, ...] = ()
     weather: WeatherState = field(default_factory=WeatherState)
+    resource_nodes: tuple[ResourceNode, ...] = ()
 
     def __post_init__(self) -> None:
         if self.seed < 0:
@@ -59,3 +61,10 @@ class SessionState:
         for ground_item in self.ground_items:
             if not self.world.contains(ground_item.position):
                 raise ValueError("ground item is outside the world")
+
+        resource_keys = [(node.position, node.resource_id) for node in self.resource_nodes]
+        if len(resource_keys) != len(set(resource_keys)):
+            raise ValueError("session must not contain duplicate resource nodes")
+        for node in self.resource_nodes:
+            if not self.world.contains(node.position):
+                raise ValueError(f"resource node {node.resource_id!r} is outside the world")

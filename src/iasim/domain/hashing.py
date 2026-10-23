@@ -8,6 +8,7 @@ from typing import Any
 
 from iasim.domain.agents import Agent
 from iasim.domain.items import GroundItem, ItemStack
+from iasim.domain.resources import ResourceNode
 from iasim.domain.session import SessionState
 from iasim.domain.world import Structure
 
@@ -69,6 +70,17 @@ def canonical_state_payload(state: SessionState) -> dict[str, Any]:
                     item.stack.definition.max_stack,
                     item.stack.quantity,
                     item.stack.charges,
+                ),
+            )
+        ],
+        "resource_nodes": [
+            _resource_node_payload(node)
+            for node in sorted(
+                state.resource_nodes,
+                key=lambda node: (
+                    node.position.y,
+                    node.position.x,
+                    node.resource_id,
                 ),
             )
         ],
@@ -166,4 +178,15 @@ def _ground_item_payload(item: GroundItem) -> dict[str, Any]:
         "x": item.position.x,
         "y": item.position.y,
         **_stack_payload(item.stack),
+    }
+
+
+def _resource_node_payload(node: ResourceNode) -> dict[str, Any]:
+    return {
+        "x": node.position.x,
+        "y": node.position.y,
+        "resource_id": node.resource_id,
+        "remaining": node.remaining,
+        "capacity": node.capacity,
+        "regrow_at_tick": node.regrow_at_tick,
     }

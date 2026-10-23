@@ -18,6 +18,7 @@ from iasim.domain.items import (
     ItemKind,
     ItemStack,
 )
+from iasim.domain.resources import RESOURCE_REGENERATION_TICKS, node_for
 from iasim.domain.session import SessionState
 from iasim.domain.turns import ActionResolver, TurnEvent
 
@@ -44,6 +45,7 @@ class ItemActionOutcome(StrEnum):
     NOT_IN_RANGE = "not_in_range"
     NO_RESOURCE = "no_resource"
     UNKNOWN_RESOURCE = "unknown_resource"
+    DEPLETED = "depleted"
     TOOL_REQUIRED = "tool_required"
     INVENTORY_FULL = "inventory_full"
     NO_ITEM = "no_item"
@@ -119,6 +121,8 @@ def resolve_gather(
     resources = catalog.resources_for_tile(state.world.tile_at(target))
     if not resources:
         return state, (_event(action, ItemActionOutcome.NO_RESOURCE),)
+
+    tracked = bool(state.resource_nodes)
     if node_id is not None:
         resource = next(
             (candidate for candidate in resources if candidate.resource_id == node_id),
@@ -126,25 +130,71 @@ def resolve_gather(
         )
         if resource is None:
             return state, (_event(action, ItemActionOutcome.UNKNOWN_RESOURCE),)
+        node = node_for(state.resource_nodes, target, resource.resource_id)
+        if tracked and (node is None or node.depleted):
+            return state, (_event(action, ItemActionOutcome.DEPLETED),)
     else:
+        available = [
+            candidate
+            for candidate in resources
+            if not tracked
+            or (
+                (
+                    candidate_node := node_for(
+                        state.resource_nodes,
+                        target,
+                        candidate.resource_id,
+                    )
+                )
+                is not None
+                and not candidate_node.depleted
+            )
+        ]
+        if not available:
+            return state, (_event(action, ItemActionOutcome.DEPLETED),)
         resource = next(
-            (candidate for candidate in resources if candidate.required_tool is None),
-            resources[0],
+            (candidate for candidate in available if candidate.required_tool is None),
+            available[0],
         )
+        node = node_for(state.resource_nodes, target, resource.resource_id)
 
     if resource.required_tool is not None:
         tool = agent.equipment.item(EquipSlot.HAND)
         if tool is None or tool.item_id != resource.required_tool:
             return state, (_event(action, ItemActionOutcome.TOOL_REQUIRED),)
 
+    quantity = resource.quantity if node is None else min(resource.quantity, node.remaining)
     spec = catalog.item(str(resource.item_id))
     try:
-        inventory = agent.inventory.add_quantity(spec.definition, resource.quantity)
+        inventory = agent.inventory.add_quantity(spec.definition, quantity)
     except InventoryError:
         return state, (_event(action, ItemActionOutcome.INVENTORY_FULL),)
 
+    new_state = _replace_agent(state, replace(agent, inventory=inventory))
+    if node is not None and tracked:
+        remaining = node.remaining - quantity
+        regrow_at_tick = (
+            state.tick + RESOURCE_REGENERATION_TICKS
+            if remaining == 0 and resource.regenerates
+            else None
+        )
+        updated_node = replace(
+            node,
+            remaining=remaining,
+            regrow_at_tick=regrow_at_tick,
+        )
+        new_state = replace(
+            new_state,
+            resource_nodes=tuple(
+                updated_node
+                if current.position == target and current.resource_id == node.resource_id
+                else current
+                for current in state.resource_nodes
+            ),
+        )
+
     return (
-        _replace_agent(state, replace(agent, inventory=inventory)),
+        new_state,
         (_event(action, ItemActionOutcome.GATHERED),),
     )
 
