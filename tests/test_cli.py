@@ -108,6 +108,23 @@ port = 8765
         self.assertEqual(event["autosave_every_ticks"], 0)
         self.assertEqual(event["config_path"], str(config_path))
 
+    def test_host_override_is_applied(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            exit_code = main(["--host", "0.0.0.0", "--port", "9001", "--log-dir", directory])
+            _, event = self._latest_log(directory)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(event["mcp_host"], "0.0.0.0")
+        self.assertEqual(event["mcp_port"], 9001)
+
+    def test_dev_open_rejects_lan_host(self) -> None:
+        error = io.StringIO()
+        with redirect_stderr(error):
+            exit_code = main(["--host", "0.0.0.0", "--dev-open"])
+
+        self.assertEqual(exit_code, ExitCode.CONFIGURATION)
+        self.assertIn("loopback", error.getvalue())
+
     def test_explicit_min_agents_wins_over_agents_flag(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             exit_code = main(["--agents", "3", "--min-agents", "2", "--log-dir", directory])

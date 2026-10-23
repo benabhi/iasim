@@ -21,7 +21,7 @@ from starlette.requests import Request
 from iasim.app.session import GameSession
 from iasim.domain.geometry import Position
 from iasim.domain.tiles import TileType, WorldMap
-from iasim.mcp.server import create_app, create_server
+from iasim.mcp.server import LAN_WARNING, create_app, create_server, server_connection_info
 from iasim.world.layout import WorldLayout
 
 TOOL_NAMES = {
@@ -190,6 +190,26 @@ class McpServerTests(unittest.TestCase):
 
             self.assertFalse(thread.is_alive())
             self.assertEqual(session.state.agents[0].position, Position(3, 2))
+
+    def test_loopback_connection_info_has_no_warning(self) -> None:
+        info = server_connection_info("127.0.0.1", 8765)
+
+        self.assertTrue(info["loopback"])
+        self.assertIsNone(info["warning"])
+        self.assertEqual(info["mcp_url"], "http://127.0.0.1:8765/mcp")
+        self.assertEqual(info["issuer_url"], "http://127.0.0.1:8765")
+
+    def test_lan_connection_info_advertises_url_and_warning(self) -> None:
+        info = server_connection_info("0.0.0.0", 8765)
+
+        self.assertFalse(info["loopback"])
+        self.assertEqual(info["warning"], LAN_WARNING)
+        self.assertTrue(str(info["mcp_url"]).endswith(":8765/mcp"))
+        self.assertNotIn("0.0.0.0", str(info["mcp_url"]))
+        self.assertEqual(
+            info["issuer_url"],
+            str(info["mcp_url"]).removesuffix("/mcp"),
+        )
 
     def test_health_route_responds_without_secrets(self) -> None:
         session = GameSession(42, layout=_layout())

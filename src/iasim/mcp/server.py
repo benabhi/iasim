@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import socket
 from typing import Any
 
 from mcp.server import MCPServer
@@ -14,11 +15,52 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from iasim.app.session import SCHEMA_VERSION, GameSession
+from iasim.config import is_loopback_host
 from iasim.domain.identifiers import AgentId
 
 DEFAULT_RESOURCE_URL = "http://127.0.0.1:8765/mcp"
 DEFAULT_ISSUER_URL = "http://127.0.0.1:8765"
 AUTH_SCOPE = "iasim:agent"
+LAN_WARNING = (
+    "MCP is exposed beyond loopback over plaintext HTTP. "
+    "Use bearer tokens only on a trusted LAN; use a VPN or tunnel for untrusted networks."
+)
+
+
+def server_connection_info(host: str, port: int) -> dict[str, Any]:
+    """Return advertised endpoints and a LAN exposure warning for ``host``/``port``."""
+    advertised_host = _advertised_host(host)
+    mcp_url = f"http://{advertised_host}:{port}/mcp"
+    issuer_url = f"http://{advertised_host}:{port}"
+    loopback = is_loopback_host(host)
+    return {
+        "host": host,
+        "port": port,
+        "advertised_host": advertised_host,
+        "mcp_url": mcp_url,
+        "issuer_url": issuer_url,
+        "loopback": loopback,
+        "warning": None if loopback else LAN_WARNING,
+    }
+
+
+def _advertised_host(host: str) -> str:
+    normalized = host.strip()
+    if normalized in {"0.0.0.0", "::"}:
+        return _local_ipv4() or "127.0.0.1"
+    return normalized or "127.0.0.1"
+
+
+def _local_ipv4() -> str | None:
+    try:
+        addresses = socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)
+    except OSError:
+        return None
+    for info in addresses:
+        address = str(info[4][0])
+        if not is_loopback_host(address):
+            return address
+    return None
 
 
 class SessionTokenVerifier:
@@ -142,9 +184,13 @@ def run_server(
     port: int = 8765,
 ) -> None:
     """Run the streamable HTTP MCP server until stopped."""
+    connection = server_connection_info(host, port)
+    if connection["warning"] is not None:
+        print(f"warning: {connection['warning']}")
+        print(f"MCP endpoint: {connection['mcp_url']}")
     server = create_server(
         session,
-        resource_url=f"http://{host}:{port}/mcp",
-        issuer_url=f"http://{host}:{port}",
+        resource_url=str(connection["mcp_url"]),
+        issuer_url=str(connection["issuer_url"]),
     )
     server.run("streamable-http", host=host, port=port)

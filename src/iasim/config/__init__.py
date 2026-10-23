@@ -12,6 +12,7 @@ from iasim.config.models import (
     UiConfig,
     WeatherConfig,
     WorldConfig,
+    is_loopback_host,
 )
 
 __all__ = [
@@ -24,5 +25,6 @@ __all__ = [
     "UiConfig",
     "WeatherConfig",
     "WorldConfig",
+    "is_loopback_host",
     "load_config",
 ]

@@ -16,6 +16,17 @@ from pydantic import (
 )
 
 
+def is_loopback_host(host: str) -> bool:
+    """Return whether ``host`` names a loopback interface."""
+    normalized = host.strip().lower()
+    if normalized == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
+
+
 class StrictModel(BaseModel):
     """Base model that rejects unknown keys and prevents mutation."""
 
@@ -96,15 +107,7 @@ class McpConfig(StrictModel):
         """Refuse to disable authentication on a non-loopback interface."""
         if not self.dev_open:
             return self
-
-        host = self.host.strip().lower()
-        if host == "localhost":
-            return self
-        try:
-            address = ipaddress.ip_address(host)
-        except ValueError as exc:
-            raise ValueError("dev_open requires a loopback host") from exc
-        if not address.is_loopback:
+        if not is_loopback_host(self.host):
             raise ValueError("dev_open requires a loopback host")
         return self
 

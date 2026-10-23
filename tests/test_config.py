@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from iasim.config import ConfigError, load_config
+from iasim.config import ConfigError, is_loopback_host, load_config
 
 
 class ConfigTests(unittest.TestCase):
@@ -25,6 +25,20 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.mcp.host, "127.0.0.1")
         self.assertEqual(config.mcp.port, 8765)
         self.assertEqual(config.ui.language, "es")
+
+    def test_loopback_host_detection(self) -> None:
+        for host in ("127.0.0.1", "127.0.0.42", "localhost", "::1"):
+            with self.subTest(host=host):
+                self.assertTrue(is_loopback_host(host))
+        for host in ("0.0.0.0", "192.168.1.10", "example.local", "::"):
+            with self.subTest(host=host):
+                self.assertFalse(is_loopback_host(host))
+
+    def test_lan_host_is_allowed_without_dev_open(self) -> None:
+        config = load_config(overrides={"mcp": {"host": "0.0.0.0"}})
+
+        self.assertEqual(config.mcp.host, "0.0.0.0")
+        self.assertFalse(config.mcp.dev_open)
 
     def test_valid_toml_loads(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

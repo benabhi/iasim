@@ -77,6 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, help="set the deterministic session seed")
     parser.add_argument("--headless", action="store_true", help="run without a window")
     parser.add_argument("--agents", type=_positive_int, help="set the lobby agent count")
+    parser.add_argument("--host", help="set the MCP bind host (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, help="set the MCP port")
     parser.add_argument("--dev-open", action="store_true", help="disable auth on loopback only")
     parser.add_argument("--min-agents", type=_positive_int, help="set the minimum agent count")
@@ -141,6 +142,8 @@ def _build_overrides(args: argparse.Namespace) -> dict[str, Any]:
         game["min_agents"] = args.min_agents
     if args.no_autosave:
         game["autosave_every_ticks"] = 0
+    if args.host is not None:
+        mcp["host"] = args.host
     if args.port is not None:
         mcp["port"] = args.port
     if args.dev_open:
