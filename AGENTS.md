@@ -12,6 +12,7 @@ This file is the mandatory operating contract for every AI agent working in this
 6. **Do not commit secrets.** Tokens, API keys, credentials, `.env` files, and runtime session data must never be committed.
 7. **Do not weaken tests, validation, determinism, or security to make a change pass.** Fix the cause.
 8. **Do not add agent administration tools to MCP.** Agents must never receive full-map, RNG, operator, or debug access.
+9. **Two-gate interaction protocol.** Every change to files or Beads issues starts with a short proposal and waits for the user's literal reply `implementar`. Every implementation ends with a report and waits for the literal reply `aprobar` before the issue is closed or the task is declared complete. Read-only questions are exempt. See section 10.
 
 If any instruction conflicts, stop and ask the user. The order of authority is: user instruction, this file, `docs/SRS.md`, the claimed Beads issue, then existing code.
 
@@ -26,6 +27,8 @@ bd list --status=in_progress --json
 ```
 
 Then select work only from `bd ready`, unless the user explicitly assigns a different issue.
+
+For any request that changes files or issues, present the Gate 1 proposal and wait for `implementar` before claiming the issue, creating a branch, or editing files (section 10).
 
 Before writing code:
 
@@ -78,7 +81,7 @@ bd blocked
 
 ### 3.4 Close work
 
-Close an issue only when every acceptance criterion is met:
+Close an issue only when every acceptance criterion is met and the user has replied `aprobar` to the Gate 2 report (section 10). Until then the issue stays `in_progress`.
 
 ```bash
 bd close <id> --reason "Implemented and verified: <evidence>" --suggest-next
@@ -346,7 +349,7 @@ A task is done only when all of the following are true:
 
 ## 9. Session close protocol
 
-Before saying the work is complete:
+After the user replies `aprobar` to the Gate 2 report (section 10), run the closing checks:
 
 ```bash
 bd close <completed-ids> --reason "Verified: <evidence>"
@@ -367,3 +370,40 @@ Then report:
 - Whether a release tag was created.
 
 No remote is configured yet. Do not push, pull, or claim remote sync until the user configures an origin.
+
+## 10. Two-gate interaction protocol
+
+This section defines the only allowed interaction loop for work that changes the repository or the issue tracker. Read-only questions, explanations, and status checks are exempt.
+
+### 10.1 Gate 1: propose and wait for `implementar`
+
+Before claiming an issue, creating a branch, or editing any file, send a short proposal. Keep it digestible: at most about ten lines, no full design document. It must cover:
+
+- the Beads issue ID and title, or the exact issue to create if none exists;
+- what will be created or changed, and where;
+- scope and non-goals;
+- how the result will be verified;
+- material risks, trade-offs, or open decisions.
+
+End the message by asking for the literal reply `implementar`. Do not perform the work until the user sends that word. Any other reply is feedback: revise the proposal and ask again.
+
+If the scope changes materially during implementation, stop and return to this gate with a revised proposal.
+
+### 10.2 Gate 2: report and wait for `aprobar`
+
+When the implementation and its verification are finished, send a short report. It must cover:
+
+- the Beads issue ID and current status (`in_progress`, not closed);
+- what was actually done compared with the proposal;
+- files changed;
+- commands run and their results;
+- deviations, trade-offs, and follow-up work;
+- decisions the user still needs to make.
+
+End the message by asking for the literal reply `aprobar`. Do not close the Beads issue, create a release tag, merge the branch, or declare the task complete until the user sends that word.
+
+Any other reply is change feedback: apply it, or return to Gate 1 if the scope changed, then report again.
+
+### 10.3 After `aprobar`
+
+Run the close steps from sections 3.4 and 9: final evidence comment, quality gates, `bd close`, and the handoff report. The trigger words are literal and stay in Spanish; do not translate or replace them.
