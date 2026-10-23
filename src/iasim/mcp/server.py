@@ -262,6 +262,16 @@ def create_server(
         return session.build(agent_id, tick, structure_id, x, y)
 
     @server.tool()
+    def iasim_say(message: str, target_id: str | None = None) -> dict[str, Any]:
+        """Send one sanitized local chat message to agents in range."""
+        agent_id = _guard(session, limiter, LimitKind.INFO)
+        if isinstance(agent_id, dict):
+            return agent_id
+        if _text_too_long(message, target_id):
+            return _message_too_long(session)
+        return session.say(agent_id, message, target_id)
+
+    @server.tool()
     def iasim_report_usage(
         tick: int,
         input_tokens: int,

@@ -40,6 +40,7 @@ TOOL_NAMES = {
     "iasim_fill",
     "iasim_craft",
     "iasim_build",
+    "iasim_say",
     "iasim_report_usage",
     "iasim_wait_for_tick",
 }
@@ -140,6 +141,21 @@ class McpServerTests(unittest.TestCase):
                         joined = _data(await client.call_tool("iasim_join", {"name": "Nia"}))
                         self.assertTrue(joined["ok"])
                         self.assertEqual(joined["spawn"], [2, 2])
+
+                        said = _data(
+                            await client.call_tool(
+                                "iasim_say",
+                                {"message": "Hola desde el test"},
+                            )
+                        )
+                        self.assertTrue(said["ok"])
+                        duplicate_say = _data(
+                            await client.call_tool(
+                                "iasim_say",
+                                {"message": "Segundo mensaje"},
+                            )
+                        )
+                        self.assertEqual(duplicate_say["error"]["code"], "ALREADY_SAID")
 
                         reported = _data(
                             await client.call_tool(

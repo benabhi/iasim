@@ -468,6 +468,7 @@ energia  -= 0.25 × factor_actividad
 ### 3.9 Comunicación, alianzas y comercio
 
 - `say`: mensaje de texto libre, máximo 280 caracteres, radio 8, una vez por tick y **no consume** la acción principal.
+- Sin `target_id`, el mensaje se entrega a todos los agentes vivos en radio 8; con `target_id`, solo a ese agente si está en radio.
 - El mensaje se entrega al inicio del tick siguiente a los agentes en rango. El operador lo ve de inmediato en el log.
 - No hay chat global.
 - Los pensamientos reportados **no** se comparten automáticamente con otros agentes; el operador los ve, los demás solo ven lo que el agente decide comunicar.
@@ -1395,6 +1396,8 @@ Las tools devuelven un resultado estructurado. Los errores de validación se dev
 | `NOT_IN_RANGE` | Interlocutor fuera del rango social. |
 | `RATE_LIMITED` | Demasiadas llamadas. |
 | `MESSAGE_TOO_LONG` | Texto excede el límite. |
+| `INVALID_MESSAGE` | El mensaje queda vacío después de sanearlo. |
+| `ALREADY_SAID` | El agente ya envió su mensaje local en este tick. |
 | `INVALID_USAGE` | Reporte de uso inválido: modelo, esfuerzo, tokens o costo fuera de rango. |
 | `NO_NEW_TICK` | `wait_for_tick` venció sin tick nuevo. |
 | `INTERNAL_ERROR` | Error inesperado; el servidor sigue operativo. |

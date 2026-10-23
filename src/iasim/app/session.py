@@ -18,6 +18,12 @@ from typing import Any
 from iasim.crafting import Catalog, load_catalog
 from iasim.domain.actions import Action, ActionKind
 from iasim.domain.agents import Agent, AgentProfile, AgentStatus
+from iasim.domain.chat import (
+    MAX_CHAT_MESSAGE_LENGTH,
+    ChatMessage,
+    sanitize_chat_text,
+    within_chat_radius,
+)
 from iasim.domain.climate import apply_climate_tick, effective_vision
 from iasim.domain.construction import advance_fires, construction_resolvers
 from iasim.domain.crafting_actions import crafting_resolvers
@@ -159,6 +165,9 @@ class GameSession:
         self._weather_max_ticks = weather_max_ticks
         self._usage_pricing = dict(usage_pricing or {})
         self._usage: dict[AgentId, list[UsageEntry]] = {}
+        self._pending_chat: list[ChatMessage] = []
+        self._delivered_chat: list[ChatMessage] = []
+        self._said_tick: dict[AgentId, int] = {}
         self._resolvers = {
             **movement_resolvers(),
             **move_to_resolvers(),
@@ -309,6 +318,7 @@ class GameSession:
             )
             self._names[agent_id] = clean_name
             self._usage.pop(agent_id, None)
+            self._said_tick.pop(agent_id, None)
             self._joined_slots.add(slot)
             self._token_agents[token] = agent_id
             self._update_phase_locked()
@@ -346,6 +356,7 @@ class GameSession:
             self._names.pop(target, None)
             self._last_results.pop(target, None)
             self._usage.pop(target, None)
+            self._said_tick.pop(target, None)
             if token is not None:
                 self._token_agents.pop(token, None)
                 slot = self._token_slots.get(token)
@@ -501,6 +512,80 @@ class GameSession:
                 agent_id: AgentUsage(tuple(entries))
                 for agent_id, entries in self._usage.items()
                 if entries
+            }
+
+    def say(
+        self,
+        agent_id: str,
+        message: str,
+        target_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Queue one sanitized local chat message for next-tick delivery."""
+        with self._lock:
+            target = AgentId(agent_id)
+            agent = self._find_agent(agent_id)
+            if target not in self._names or agent is None:
+                return self._error("NOT_YOUR_TURN", "agent is not joined")
+            if self._phase is SessionPhase.FINISHED:
+                return self._error("SESSION_FINISHED", "the session has ended")
+            if not agent.is_alive:
+                return self._error("AGENT_DEAD", "agent is dead")
+            if agent.status is AgentStatus.ABSENT:
+                return self._error("AGENT_ABSENT", "agent is absent")
+            if self._said_tick.get(target) == self._state.tick:
+                return self._error("ALREADY_SAID", "agent already spoke this tick")
+            if not isinstance(message, str):
+                return self._error("INVALID_MESSAGE", "message must be a string")
+            if len(message) > MAX_CHAT_MESSAGE_LENGTH:
+                return self._error(
+                    "MESSAGE_TOO_LONG",
+                    f"chat messages are limited to {MAX_CHAT_MESSAGE_LENGTH} characters",
+                )
+            text = sanitize_chat_text(message)
+            if not text:
+                return self._error("INVALID_MESSAGE", "message is empty after sanitization")
+
+            target_agent_id: AgentId | None = None
+            if target_id is not None:
+                if not isinstance(target_id, str) or not target_id:
+                    return self._error("INVALID_TARGET", "target_id must be a non-empty string")
+                target_agent_id = AgentId(target_id)
+                recipient = self._find_agent(str(target_agent_id))
+                if recipient is None or not recipient.is_alive or recipient.agent_id == target:
+                    return self._error("INVALID_TARGET", "chat target is not a living agent")
+                if not within_chat_radius(agent.position, recipient.position):
+                    return self._error(
+                        "NOT_IN_RANGE",
+                        "chat target is outside the social radius",
+                    )
+                recipients: tuple[AgentId, ...] = (recipient.agent_id,)
+            else:
+                recipients = tuple(
+                    sorted(
+                        other.agent_id
+                        for other in self._state.agents
+                        if other.agent_id != target
+                        and other.is_alive
+                        and within_chat_radius(agent.position, other.position)
+                    )
+                )
+
+            self._pending_chat.append(
+                ChatMessage(
+                    sender_id=target,
+                    recipients=recipients,
+                    text=text,
+                    sent_tick=self._state.tick,
+                    deliver_tick=self._state.tick + 1,
+                    target_id=target_agent_id,
+                )
+            )
+            self._said_tick[target] = self._state.tick
+            return {
+                "ok": True,
+                "schema_version": SCHEMA_VERSION,
+                "tick": self._state.tick,
+                "status": "queued",
             }
 
     def move(self, agent_id: str, tick: int, dx: int, dy: int) -> dict[str, Any]:
@@ -1058,7 +1143,18 @@ class GameSession:
                     for entry in agent.memory.agents
                 ],
                 "agents": visible_agents,
-                "messages": [],
+                "messages": [
+                    message.as_observation()
+                    for message in sorted(
+                        (
+                            current
+                            for current in self._delivered_chat
+                            if current.deliver_tick == self._state.tick
+                            and agent.agent_id in current.recipients
+                        ),
+                        key=lambda current: (current.sent_tick, str(current.sender_id)),
+                    )
+                ],
             },
             "inventory": {
                 "weight_kg": inventory.total_weight_grams / 1000.0,
@@ -1131,7 +1227,15 @@ class GameSession:
                 tick=state.tick + 1,
             ),
         )
+        self._advance_chat_locked(state.tick + 1)
         return self._update_memory_locked(state)
+
+    def _advance_chat_locked(self, tick: int) -> None:
+        ready = [message for message in self._pending_chat if message.deliver_tick <= tick]
+        self._pending_chat = [
+            message for message in self._pending_chat if message.deliver_tick > tick
+        ]
+        self._delivered_chat = ready
 
     def _update_memory_locked(self, state: SessionState) -> SessionState:
         clock = self._engine.clock
