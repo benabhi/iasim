@@ -33,6 +33,12 @@ from iasim.domain.identifiers import AgentId
 from iasim.domain.item_actions import item_action_resolvers
 from iasim.domain.items import GroundItem, ItemStack
 from iasim.domain.memory import AgentMemory, MemoryEntry
+from iasim.domain.mind import (
+    MAX_INTENT_LENGTH,
+    MAX_PLAN_LENGTH,
+    MAX_THOUGHT_LENGTH,
+    MindReport,
+)
 from iasim.domain.movement import movement_resolvers
 from iasim.domain.needs import apply_needs_tick
 from iasim.domain.resources import (
@@ -49,6 +55,7 @@ from iasim.domain.status import (
     status_tags,
     strength_penalty,
 )
+from iasim.domain.text import sanitize_text
 from iasim.domain.turns import (
     ActionRejectedError,
     ResolvedAction,
@@ -115,6 +122,7 @@ class GameSession:
         weather_min_ticks: int = DEFAULT_WEATHER_MIN_TICKS,
         weather_max_ticks: int = DEFAULT_WEATHER_MAX_TICKS,
         usage_pricing: Mapping[str, ModelPricing] | None = None,
+        mind_log_path: Path | None = None,
     ) -> None:
         if seed < 0:
             raise ValueError(f"seed must be non-negative, got {seed}")
@@ -165,6 +173,9 @@ class GameSession:
         self._weather_max_ticks = weather_max_ticks
         self._usage_pricing = dict(usage_pricing or {})
         self._usage: dict[AgentId, list[UsageEntry]] = {}
+        self._mind_log_path = mind_log_path
+        self._mind_reports: dict[AgentId, MindReport] = {}
+        self._mind_tick: dict[AgentId, int] = {}
         self._pending_chat: list[ChatMessage] = []
         self._delivered_chat: list[ChatMessage] = []
         self._said_tick: dict[AgentId, int] = {}
@@ -319,6 +330,8 @@ class GameSession:
             self._names[agent_id] = clean_name
             self._usage.pop(agent_id, None)
             self._said_tick.pop(agent_id, None)
+            self._mind_reports.pop(agent_id, None)
+            self._mind_tick.pop(agent_id, None)
             self._joined_slots.add(slot)
             self._token_agents[token] = agent_id
             self._update_phase_locked()
@@ -357,6 +370,8 @@ class GameSession:
             self._last_results.pop(target, None)
             self._usage.pop(target, None)
             self._said_tick.pop(target, None)
+            self._mind_reports.pop(target, None)
+            self._mind_tick.pop(target, None)
             if token is not None:
                 self._token_agents.pop(token, None)
                 slot = self._token_slots.get(token)
@@ -587,6 +602,127 @@ class GameSession:
                 "tick": self._state.tick,
                 "status": "queued",
             }
+
+    def report_mind(
+        self,
+        agent_id: str,
+        tick: int,
+        *,
+        intent: str,
+        thought: str,
+        plan: str | None = None,
+        confidence: int | None = None,
+    ) -> dict[str, Any]:
+        """Record one sanitized mind report for the current tick."""
+        with self._lock:
+            target = AgentId(agent_id)
+            agent = self._find_agent(agent_id)
+            if target not in self._names or agent is None:
+                return self._error("NOT_YOUR_TURN", "agent is not joined")
+            if self._phase is SessionPhase.FINISHED:
+                return self._error("SESSION_FINISHED", "the session has ended")
+            if not agent.is_alive:
+                return self._error("AGENT_DEAD", "agent is dead")
+            if agent.status is AgentStatus.ABSENT:
+                return self._error("AGENT_ABSENT", "agent is absent")
+            if isinstance(tick, bool) or not isinstance(tick, int) or tick < 0:
+                return self._error("INVALID_TICK", "mind report tick must be non-negative")
+            if tick > self._state.tick:
+                return self._error("INVALID_TICK", "mind report tick is in the future")
+            if tick < self._state.tick:
+                return self._error("STALE_TICK", "mind report tick is stale")
+            if self._mind_tick.get(target) == tick:
+                return self._error("ALREADY_REPORTED", "agent already reported this tick")
+            if not isinstance(intent, str) or not isinstance(thought, str):
+                return self._error("INVALID_MIND_REPORT", "intent and thought must be strings")
+            clean_intent = sanitize_text(intent)
+            clean_thought = sanitize_text(thought)
+            if not clean_intent or not clean_thought:
+                return self._error(
+                    "INVALID_MIND_REPORT",
+                    "intent and thought must not be empty after sanitization",
+                )
+            if len(clean_intent) > MAX_INTENT_LENGTH:
+                return self._error(
+                    "MESSAGE_TOO_LONG",
+                    f"intent is limited to {MAX_INTENT_LENGTH} characters",
+                )
+            if len(clean_thought) > MAX_THOUGHT_LENGTH:
+                return self._error(
+                    "MESSAGE_TOO_LONG",
+                    f"thought is limited to {MAX_THOUGHT_LENGTH} characters",
+                )
+            clean_plan: str | None = None
+            if plan is not None:
+                if not isinstance(plan, str):
+                    return self._error("INVALID_MIND_REPORT", "plan must be a string")
+                clean_plan = sanitize_text(plan) or None
+                if clean_plan is not None and len(clean_plan) > MAX_PLAN_LENGTH:
+                    return self._error(
+                        "MESSAGE_TOO_LONG",
+                        f"plan is limited to {MAX_PLAN_LENGTH} characters",
+                    )
+            if confidence is not None and (
+                isinstance(confidence, bool)
+                or not isinstance(confidence, int)
+                or not 0 <= confidence <= 100
+            ):
+                return self._error(
+                    "INVALID_MIND_REPORT",
+                    "confidence must be an integer within [0, 100]",
+                )
+            try:
+                report = MindReport(
+                    agent_id=target,
+                    tick=tick,
+                    intent=clean_intent,
+                    thought=clean_thought,
+                    plan=clean_plan,
+                    confidence=confidence,
+                )
+                self._append_mind_log_locked(report)
+            except (PersistenceError, ValueError) as exc:
+                return self._error("INTERNAL_ERROR", f"cannot record mind report: {exc}")
+            self._mind_reports[target] = report
+            self._mind_tick[target] = tick
+            return {
+                "ok": True,
+                "schema_version": SCHEMA_VERSION,
+                "tick": tick,
+                "status": "recorded",
+            }
+
+    def mind_report_for(self, agent_id: str) -> MindReport | None:
+        """Return the latest operator-visible report for a joined agent."""
+        with self._lock:
+            target = AgentId(agent_id)
+            if target not in self._names:
+                return None
+            return self._mind_reports.get(target)
+
+    def mind_reports_snapshot(self) -> dict[AgentId, MindReport]:
+        """Return latest mind reports for all reporting agents."""
+        with self._lock:
+            return dict(self._mind_reports)
+
+    def _append_mind_log_locked(self, report: MindReport) -> None:
+        if self._mind_log_path is None:
+            return
+        try:
+            self._mind_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._mind_log_path.open("a", encoding="utf-8") as handle:
+                handle.write(
+                    json.dumps(
+                        report.as_log_record(SCHEMA_VERSION),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                )
+        except OSError as exc:
+            raise PersistenceError(
+                f"cannot append mind report to {self._mind_log_path}: {exc}"
+            ) from exc
 
     def move(self, agent_id: str, tick: int, dx: int, dy: int) -> dict[str, Any]:
         """Queue one primary move action for the current tick."""
@@ -827,6 +963,7 @@ class GameSession:
                 weather_min_ticks=self._weather_min_ticks,
                 weather_max_ticks=self._weather_max_ticks,
                 usage_pricing=self._usage_pricing,
+                mind_log_path=self._mind_log_path,
             )
 
     def health(self) -> dict[str, Any]:

@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 from iasim.domain.geometry import Position
 from iasim.domain.identifiers import AgentId
+from iasim.domain.text import sanitize_text
 
 CHAT_RADIUS = 8
 MAX_CHAT_MESSAGE_LENGTH = 280
-_ANSI_PATTERN = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))")
 
 
 def within_chat_radius(origin: Position, target: Position) -> bool:
@@ -19,10 +18,8 @@ def within_chat_radius(origin: Position, target: Position) -> bool:
 
 
 def sanitize_chat_text(value: str) -> str:
-    """Remove ANSI/control sequences and collapse chat text to one line."""
-    without_ansi = _ANSI_PATTERN.sub("", value)
-    printable = "".join(character if character.isprintable() else " " for character in without_ansi)
-    return " ".join(printable.split())
+    """Sanitize a chat message to one line."""
+    return sanitize_text(value)
 
 
 @dataclass(frozen=True, slots=True)

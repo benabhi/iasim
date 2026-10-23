@@ -11,6 +11,7 @@ from iasim.domain.climate import effective_vision
 from iasim.domain.clock import DayPhase, SimulationClock
 from iasim.domain.geometry import Position
 from iasim.domain.identifiers import AgentId
+from iasim.domain.mind import MindReport
 from iasim.domain.session import SessionState
 from iasim.domain.status import Condition, status_tags
 from iasim.domain.tiles import TileType
@@ -196,6 +197,7 @@ def render_base_screen(
     ascii_mode: bool = False,
     focus_mode: bool = False,
     usage: Mapping[AgentId, AgentUsage] | None = None,
+    mind_reports: Mapping[AgentId, MindReport] | None = None,
 ) -> BaseScreen:
     """Render the deterministic base screen without mutating the session."""
     canvas = _Canvas()
@@ -213,6 +215,7 @@ def render_base_screen(
         capacity=capacity,
         ascii_mode=ascii_mode,
         usage=usage,
+        mind_reports=mind_reports,
     )
     _render_bottom_bar(canvas, ascii_mode)
     return canvas.to_screen()
@@ -371,6 +374,7 @@ def _render_panel(
     capacity: int,
     ascii_mode: bool,
     usage: Mapping[AgentId, AgentUsage] | None,
+    mind_reports: Mapping[AgentId, MindReport] | None,
 ) -> None:
     canvas.fill(
         PANEL_X,
@@ -507,8 +511,21 @@ def _render_panel(
     y += 1
     _panel(canvas, y, "MENTE (REPORTADO)", fg=theme.CYAN, bold=True)
     y += 1
-    _panel(canvas, y, "— sin reporte —", fg=theme.DIM)
-    y += 1
+    selected_mind = mind_reports.get(selected.agent_id) if mind_reports is not None else None
+    if selected_mind is None:
+        _panel(canvas, y, "— sin reporte —", fg=theme.DIM)
+        y += 1
+    else:
+        _panel(canvas, y, f"Intención: {selected_mind.intent}")
+        y += 1
+        _panel(canvas, y, f"Pensamiento: {selected_mind.thought}")
+        y += 1
+        if selected_mind.plan is not None:
+            _panel(canvas, y, f"Plan: {selected_mind.plan}")
+            y += 1
+        if selected_mind.confidence is not None:
+            _panel(canvas, y, f"Confianza: {selected_mind.confidence}")
+            y += 1
 
     selected_usage = usage.get(selected.agent_id) if usage is not None else None
     if selected_usage is not None and selected_usage.entries:

@@ -272,6 +272,27 @@ def create_server(
         return session.say(agent_id, message, target_id)
 
     @server.tool()
+    def iasim_report_mind(
+        tick: int,
+        intent: str,
+        thought: str,
+        plan: str | None = None,
+        confidence: int | None = None,
+    ) -> dict[str, Any]:
+        """Report intent, thought, and plan for operator display."""
+        agent_id = _guard(session, limiter, LimitKind.INFO)
+        if isinstance(agent_id, dict):
+            return agent_id
+        return session.report_mind(
+            agent_id,
+            tick,
+            intent=intent,
+            thought=thought,
+            plan=plan,
+            confidence=confidence,
+        )
+
+    @server.tool()
     def iasim_report_usage(
         tick: int,
         input_tokens: int,
