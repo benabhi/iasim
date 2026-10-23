@@ -443,11 +443,14 @@ def _render_panel(
     tags = _status_tags(selected)
     _panel(canvas, y, f"ESTADOS: {' · '.join(tags) if tags else '—'}")
     y += 1
+    equipment = " · ".join(
+        f"{slot.value}:{spec.item_id}" for slot, spec in selected.equipment.items
+    ) or ("-" if ascii_mode else "—")
     _panel(
         canvas,
         y,
         f"CARGA {inventory.total_weight_grams / 1000.0:.1f}/"
-        f"{inventory.max_weight_grams / 1000.0:.1f} kg · EQUIPO: —",
+        f"{inventory.max_weight_grams / 1000.0:.1f} kg · EQUIPO: {equipment}",
     )
     y += 1
 

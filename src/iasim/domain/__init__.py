@@ -8,7 +8,17 @@ from iasim.domain.clock import DayPhase, SimulationClock
 from iasim.domain.geometry import Position
 from iasim.domain.hashing import canonical_state_hash
 from iasim.domain.identifiers import AgentId, ItemId
-from iasim.domain.items import GroundItem, Inventory, ItemDefinition, ItemStack
+from iasim.domain.items import (
+    Equipment,
+    EquipSlot,
+    GroundItem,
+    Inventory,
+    InventoryError,
+    ItemDefinition,
+    ItemKind,
+    ItemSpec,
+    ItemStack,
+)
 from iasim.domain.movement import (
     MovementOutcome,
     movement_resolvers,
@@ -45,10 +55,15 @@ __all__ = [
     "AgentStatus",
     "DayPhase",
     "DeterministicRng",
+    "EquipSlot",
+    "Equipment",
     "GroundItem",
     "Inventory",
+    "InventoryError",
     "ItemDefinition",
     "ItemId",
+    "ItemKind",
+    "ItemSpec",
     "ItemStack",
     "MovementOutcome",
     "Position",

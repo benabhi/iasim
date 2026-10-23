@@ -19,7 +19,7 @@ from iasim.domain.agents import Agent, AgentProfile, AgentStatus
 from iasim.domain.geometry import Position
 from iasim.domain.hashing import canonical_state_hash
 from iasim.domain.identifiers import AgentId
-from iasim.domain.items import GroundItem
+from iasim.domain.items import GroundItem, ItemStack
 from iasim.domain.movement import movement_resolvers
 from iasim.domain.needs import apply_needs_tick
 from iasim.domain.rng import U64_MASK
@@ -509,9 +509,13 @@ class GameSession:
         )
 
     def _drop_inventory_locked(self, agent: Agent) -> None:
-        if agent.inventory.is_empty:
+        stacks = [
+            *agent.inventory.stacks,
+            *(ItemStack(spec.definition, 1) for _, spec in agent.equipment.items),
+        ]
+        if not stacks:
             return
-        dropped = tuple(GroundItem(agent.position, stack) for stack in agent.inventory.stacks)
+        dropped = tuple(GroundItem(agent.position, stack) for stack in stacks)
         new_state = replace(
             self._state,
             ground_items=(*self._state.ground_items, *dropped),
@@ -602,9 +606,10 @@ class GameSession:
                 "strength": attributes.strength,
                 "dexterity": attributes.dexterity,
                 "endurance": attributes.endurance,
-                "effective_vision": attributes.vision,
+                "effective_vision": agent.effective_vision,
                 "carry_kg": inventory.total_weight_grams / 1000.0,
-                "carry_capacity_kg": inventory.max_weight_grams / 1000.0,
+                "carry_capacity_kg": agent.carry_capacity_grams / 1000.0,
+                "equipment": {slot.value: spec.item_id for slot, spec in agent.equipment.items},
             },
             "environment": {
                 "weather": "clear",

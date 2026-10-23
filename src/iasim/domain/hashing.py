@@ -97,6 +97,10 @@ def _agent_payload(agent: Agent) -> dict[str, Any]:
                 )
             ],
         },
+        "equipment": [
+            {"slot": slot.value, "item_id": spec.item_id}
+            for slot, spec in sorted(agent.equipment.items, key=lambda entry: entry[0].value)
+        ],
     }
 
 

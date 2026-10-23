@@ -6,13 +6,12 @@ import re
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
 from iasim.domain.identifiers import ItemId, validate_item_id
-from iasim.domain.items import ItemDefinition
+from iasim.domain.items import EquipSlot, ItemDefinition, ItemKind, ItemSpec
 from iasim.domain.tiles import TileType
 from iasim.domain.world import StructureKind
 
@@ -22,88 +21,6 @@ _CATALOG_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
 class CatalogError(ValueError):
     """The catalog data is missing, malformed, or internally inconsistent."""
-
-
-class ItemKind(StrEnum):
-    """Functional categories used by the MVP catalog."""
-
-    RESOURCE = "resource"
-    FOOD = "food"
-    COMPONENT = "component"
-    WEAPON = "weapon"
-    TOOL = "tool"
-    LIGHT = "light"
-    CONSUMABLE = "consumable"
-    CONTAINER = "container"
-    EQUIPMENT = "equipment"
-    KIT = "kit"
-
-
-class EquipSlot(StrEnum):
-    """Equipment slots from the SRS inventory contract."""
-
-    HAND = "hand"
-    BODY = "body"
-    BACK = "back"
-    LIGHT = "light"
-
-
-@dataclass(frozen=True, slots=True)
-class ItemSpec:
-    """Catalog metadata layered over the immutable item definition."""
-
-    definition: ItemDefinition
-    name: str
-    kind: ItemKind
-    equip_slot: EquipSlot | None = None
-    weapon_damage: int = 0
-    tool_tags: tuple[str, ...] = ()
-    hunger_restore: int = 0
-    thirst_restore: int = 0
-    water_charges: int = 0
-    bonus_slots: int = 0
-    bonus_weight_grams: int = 0
-    light_radius: int = 0
-    duration_ticks: int = 0
-    stops_bleeding: bool = False
-    thermal_insulation: int = 0
-    structure: StructureKind | None = None
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.definition, ItemDefinition):
-            raise ValueError("definition must be an ItemDefinition")
-        if not self.name.strip():
-            raise ValueError("name must not be empty")
-        if not isinstance(self.kind, ItemKind):
-            raise ValueError(f"kind must be an ItemKind, got {self.kind!r}")
-        if self.equip_slot is not None and not isinstance(self.equip_slot, EquipSlot):
-            raise ValueError(f"equip_slot must be an EquipSlot, got {self.equip_slot!r}")
-        for field_name, value in (
-            ("weapon_damage", self.weapon_damage),
-            ("hunger_restore", self.hunger_restore),
-            ("thirst_restore", self.thirst_restore),
-            ("water_charges", self.water_charges),
-            ("bonus_slots", self.bonus_slots),
-            ("bonus_weight_grams", self.bonus_weight_grams),
-            ("light_radius", self.light_radius),
-            ("duration_ticks", self.duration_ticks),
-            ("thermal_insulation", self.thermal_insulation),
-        ):
-            if value < 0:
-                raise ValueError(f"{field_name} must be non-negative, got {value}")
-        if self.tool_tags != tuple(dict.fromkeys(self.tool_tags)):
-            raise ValueError("tool_tags must not contain duplicates")
-        if any(not tag for tag in self.tool_tags):
-            raise ValueError("tool_tags must not contain empty values")
-        if self.kind is ItemKind.KIT and self.structure is None:
-            raise ValueError("kit items must declare a structure")
-        if self.structure is not None and not isinstance(self.structure, StructureKind):
-            raise ValueError(f"structure must be a StructureKind, got {self.structure!r}")
-
-    @property
-    def item_id(self) -> ItemId:
-        """Return the stable item id."""
-        return self.definition.item_id
 
 
 @dataclass(frozen=True, slots=True)

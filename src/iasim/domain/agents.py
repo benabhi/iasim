@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
 from iasim.domain.geometry import Position
 from iasim.domain.identifiers import AgentId, validate_agent_id
-from iasim.domain.items import BASE_SLOTS, Inventory
+from iasim.domain.items import (
+    BASE_SLOTS,
+    Equipment,
+    EquipSlot,
+    Inventory,
+    InventoryError,
+    ItemSpec,
+    ItemStack,
+)
 
 _CENTI = 100
 
@@ -103,21 +111,27 @@ class Agent:
     position: Position
     attributes: AgentAttributes = field(default_factory=AgentAttributes)
     inventory: Inventory = field(default_factory=_default_inventory)
+    equipment: Equipment = field(default_factory=Equipment)
     status: AgentStatus = AgentStatus.ACTIVE
 
     def __post_init__(self) -> None:
         validate_agent_id(self.agent_id)
         if not isinstance(self.status, AgentStatus):
             raise ValueError(f"status must be an AgentStatus, got {self.status!r}")
-        if self.inventory.max_slots < BASE_SLOTS:
+        if not isinstance(self.equipment, Equipment):
+            raise ValueError(f"equipment must be an Equipment, got {self.equipment!r}")
+        required_slots = BASE_SLOTS + self.equipment.bonus_slots
+        if self.inventory.max_slots < required_slots:
             raise ValueError(
-                f"inventory has {self.inventory.max_slots} slots, base minimum is {BASE_SLOTS}"
+                f"inventory has {self.inventory.max_slots} slots, required minimum is "
+                f"{required_slots}"
             )
-        required_capacity = Inventory.base_capacity_grams(self.attributes.strength)
+        required_capacity = (
+            Inventory.base_capacity_grams(self.attributes.strength)
+            + self.equipment.bonus_weight_grams
+        )
         if self.inventory.max_weight_grams < required_capacity:
-            raise ValueError(
-                f"inventory capacity is below the strength-based minimum of {required_capacity} g"
-            )
+            raise ValueError(f"inventory capacity is below the required {required_capacity} g")
         has_zero_health = self.attributes.health_centi == 0
         if self.status is AgentStatus.DEAD and not has_zero_health:
             raise ValueError("dead agents must have zero health")
@@ -128,6 +142,77 @@ class Agent:
     def is_alive(self) -> bool:
         """Return whether the agent is not dead."""
         return self.status is not AgentStatus.DEAD
+
+    @property
+    def max_slots(self) -> int:
+        """Return effective inventory slots including equipment bonuses."""
+        return BASE_SLOTS + self.equipment.bonus_slots
+
+    @property
+    def carry_capacity_grams(self) -> int:
+        """Return effective carrying capacity including equipment bonuses."""
+        return (
+            Inventory.base_capacity_grams(self.attributes.strength)
+            + self.equipment.bonus_weight_grams
+        )
+
+    @property
+    def weapon_damage(self) -> int:
+        """Return the damage of the equipped hand weapon."""
+        return self.equipment.weapon_damage
+
+    @property
+    def light_radius(self) -> int:
+        """Return the light radius of the equipped light source."""
+        return self.equipment.light_radius
+
+    @property
+    def effective_vision(self) -> int:
+        """Return base vision plus equipped light radius."""
+        return self.attributes.vision + self.equipment.light_radius
+
+    @property
+    def thermal_insulation(self) -> int:
+        """Return the insulation from equipped body clothing."""
+        return self.equipment.thermal_insulation
+
+    def equip(self, spec: ItemSpec) -> Agent:
+        """Equip one unit of ``spec`` from the inventory."""
+        if spec.equip_slot is None:
+            raise InventoryError(f"item {spec.item_id!r} is not equipable")
+        if self.equipment.item(spec.equip_slot) is not None:
+            raise InventoryError(f"equipment slot {spec.equip_slot.value!r} is occupied")
+        stack = self.inventory.stack_for(spec.item_id)
+        if stack is None:
+            raise InventoryError(f"item {spec.item_id!r} is not in the inventory")
+        if stack.definition != spec.definition:
+            raise InventoryError(f"item {spec.item_id!r} does not match the catalog definition")
+        new_inventory = self.inventory.remove(spec.item_id, 1)
+        new_equipment = self.equipment.equip(spec)
+        new_inventory = new_inventory.with_capacity(
+            max_slots=BASE_SLOTS + new_equipment.bonus_slots,
+            max_weight_grams=(
+                Inventory.base_capacity_grams(self.attributes.strength)
+                + new_equipment.bonus_weight_grams
+            ),
+        )
+        return replace(self, inventory=new_inventory, equipment=new_equipment)
+
+    def unequip(self, slot: EquipSlot) -> Agent:
+        """Move the item in ``slot`` back into the inventory."""
+        spec = self.equipment.item(slot)
+        if spec is None:
+            raise InventoryError(f"equipment slot {slot.value!r} is empty")
+        new_equipment = self.equipment.unequip(slot)
+        base_inventory = self.inventory.with_capacity(
+            max_slots=BASE_SLOTS + new_equipment.bonus_slots,
+            max_weight_grams=(
+                Inventory.base_capacity_grams(self.attributes.strength)
+                + new_equipment.bonus_weight_grams
+            ),
+        )
+        new_inventory = base_inventory.add(ItemStack(spec.definition, 1))
+        return replace(self, inventory=new_inventory, equipment=new_equipment)
 
 
 @dataclass(frozen=True, slots=True)
