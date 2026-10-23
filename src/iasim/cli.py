@@ -13,8 +13,10 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 from iasim import MCP_PROTOCOL_VERSION, __version__
+from iasim.app.session import GameSession
 from iasim.config import ConfigError, IasimConfig, load_config
 from iasim.errors import ExitCode, IasimError, PersistenceError
+from iasim.mcp.server import run_server
 
 LOG_FILENAME = "iasim.log"
 _LOG_FIELDS = (
@@ -79,10 +81,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--agents", type=_positive_int, help="set the lobby agent count")
     parser.add_argument("--host", help="set the MCP bind host (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, help="set the MCP port")
+    parser.add_argument("--max-agents", type=_positive_int, help="set the concurrent agent limit")
     parser.add_argument("--dev-open", action="store_true", help="disable auth on loopback only")
     parser.add_argument("--min-agents", type=_positive_int, help="set the minimum agent count")
     parser.add_argument("--no-autosave", action="store_true", help="disable automatic saves")
     parser.add_argument("--log-dir", type=Path, help="set the run log directory")
+    parser.add_argument(
+        "command",
+        nargs="?",
+        choices=("serve",),
+        help="use 'serve --headless' to start the MCP server",
+    )
     session_source = parser.add_mutually_exclusive_group()
     session_source.add_argument("--load", type=Path, help="load a saved session")
     session_source.add_argument("--replay", type=Path, help="replay a saved session")
@@ -123,6 +132,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"load requested: {args.load}")
     if args.replay is not None:
         print(f"replay requested: {args.replay}")
+
+    if args.command == "serve":
+        if not (args.headless or config.game.headless):
+            print(
+                "error: GUI startup is not available yet; use 'iasim serve --headless'",
+                file=sys.stderr,
+            )
+            return int(ExitCode.CONFIGURATION)
+        try:
+            session = GameSession(
+                seed,
+                tick_minutes=config.game.tick_minutes,
+                turn_timeout_ms=config.game.turn_timeout_ms,
+                max_agents=config.game.max_agents,
+                token_path=run_dir / "agents.json",
+            )
+            run_server(session, host=config.mcp.host, port=config.mcp.port)
+        except KeyboardInterrupt:
+            print("MCP server stopped")
+        except IasimError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return int(exc.exit_code)
+        except OSError as exc:
+            print(f"error: MCP server could not start: {exc}", file=sys.stderr)
+            return int(ExitCode.MCP)
+        except Exception as exc:
+            print(f"error: internal error: {exc}", file=sys.stderr)
+            return int(ExitCode.INTERNAL)
+
     return int(ExitCode.SUCCESS)
 
 
@@ -140,6 +178,8 @@ def _build_overrides(args: argparse.Namespace) -> dict[str, Any]:
         game["max_agents"] = args.agents
     if args.min_agents is not None:
         game["min_agents"] = args.min_agents
+    if args.max_agents is not None:
+        game["max_agents"] = args.max_agents
     if args.no_autosave:
         game["autosave_every_ticks"] = 0
     if args.host is not None:

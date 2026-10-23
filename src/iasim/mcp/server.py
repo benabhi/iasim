@@ -185,9 +185,9 @@ def run_server(
 ) -> None:
     """Run the streamable HTTP MCP server until stopped."""
     connection = server_connection_info(host, port)
+    print(f"MCP endpoint: {connection['mcp_url']}")
     if connection["warning"] is not None:
         print(f"warning: {connection['warning']}")
-        print(f"MCP endpoint: {connection['mcp_url']}")
     server = create_server(
         session,
         resource_url=str(connection["mcp_url"]),

@@ -9,6 +9,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from iasim import MCP_PROTOCOL_VERSION, __version__
 from iasim.cli import main
@@ -107,6 +108,49 @@ port = 8765
         self.assertEqual(event["agents_max"], 3)
         self.assertEqual(event["autosave_every_ticks"], 0)
         self.assertEqual(event["config_path"], str(config_path))
+
+    def test_serve_headless_starts_server_with_config_and_tokens(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with patch("iasim.cli.run_server") as run_server_mock:
+                exit_code = main(
+                    [
+                        "serve",
+                        "--headless",
+                        "--seed",
+                        "11",
+                        "--host",
+                        "0.0.0.0",
+                        "--port",
+                        "9002",
+                        "--max-agents",
+                        "2",
+                        "--log-dir",
+                        directory,
+                    ]
+                )
+            log_path, event = self._latest_log(directory)
+            run_dir = log_path.parent
+            session = run_server_mock.call_args.args[0]
+            token_data = json.loads((run_dir / "agents.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(event["seed"], 11)
+        self.assertEqual(run_server_mock.call_args.kwargs, {"host": "0.0.0.0", "port": 9002})
+        self.assertEqual(session.max_agents, 2)
+        self.assertEqual(len(session.tokens), 2)
+        self.assertEqual(token_data["max_agents"], 2)
+        self.assertEqual(len(token_data["agents"]), 2)
+
+    def test_serve_without_headless_is_rejected(self) -> None:
+        error = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            with redirect_stderr(error):
+                exit_code = main(["serve", "--seed", "1", "--log-dir", directory])
+            run_dir = next(Path(directory).iterdir())
+
+        self.assertEqual(exit_code, ExitCode.CONFIGURATION)
+        self.assertIn("headless", error.getvalue())
+        self.assertFalse((run_dir / "agents.json").exists())
 
     def test_host_override_is_applied(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
