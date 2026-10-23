@@ -155,6 +155,22 @@ class TurnEngine:
             raise ActionRejectedError(f"agent {action.agent_id!r} already acted this tick")
         self._actions[action.agent_id] = action
 
+    def remove_agent(self, agent_id: AgentId) -> None:
+        """Remove an agent and its pending action without advancing the tick."""
+        self._actions.pop(agent_id, None)
+        if self._find_agent(agent_id) is None:
+            return
+        self._state = replace(
+            self._state,
+            agents=tuple(agent for agent in self._state.agents if agent.agent_id != agent_id),
+        )
+
+    def replace_state(self, state: SessionState) -> None:
+        """Replace the state while preserving pending actions and the clock."""
+        if state.tick != self._state.tick:
+            raise TurnStateError("replacement state must keep the current tick")
+        self._state = state
+
     def resolve(self) -> TurnResult:
         """Resolve the current tick in stable initiative order."""
         missing = {action.kind for action in self._actions.values()} - self._resolvers.keys()

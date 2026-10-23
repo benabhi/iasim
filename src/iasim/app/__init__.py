@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from iasim.app.session import GameSession
+from iasim.app.session import GameSession, SessionEndReason, SessionPhase
 
-__all__ = ["GameSession"]
+__all__ = ["GameSession", "SessionEndReason", "SessionPhase"]

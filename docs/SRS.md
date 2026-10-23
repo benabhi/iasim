@@ -1162,6 +1162,7 @@ El reporte es **voluntario, no verificado y potencialmente engañoso**. La UI lo
 8. Si el agente duerme o está ausente, el servidor no espera su acción.
 
 - Un agente puede consultar su última observación sin avanzar el tick.
+- `iasim_join` se acepta entre ticks; si el tick actual tiene acciones pendientes, devuelve `TICK_IN_PROGRESS` y el cliente debe reintentar en el siguiente tick.
 - Si intenta actuar con un tick viejo, recibe `STALE_TICK`.
 - Si intenta actuar dos veces en el mismo tick, recibe `ALREADY_ACTED`.
 - Si el deadline vence, el servidor resuelve con las acciones recibidas y marca `skip`.
@@ -1237,6 +1238,12 @@ La observación es el contrato principal entre el juego y el agente. Ejemplo abr
 {
   "schema_version": "1.0",
   "tick": 142,
+  "session": {
+    "phase": "running",
+    "max_agents": 8,
+    "joined_agents": 2,
+    "alive_agents": 2
+  },
   "server_time_ms": 1750000000123,
   "deadline_ms": 60000,
   "time": {
@@ -1316,7 +1323,8 @@ La observación es el contrato principal entre el juego y el agente. Ejemplo abr
 
 Campos obligatorios:
 
-- `schema_version`, `tick`, `server_time_ms`, `deadline_ms`.
+- `schema_version`, `tick`, `session`, `server_time_ms`, `deadline_ms`.
+- `session.phase` es `waiting`, `running` o `finished`; incluye `max_agents`, `joined_agents` y `alive_agents`, y `end_reason` si terminó.
 - `time`, `agent`, `environment`.
 - `perception.visible`, `perception.memory_updates`, `perception.agents`, `perception.messages`.
 - `inventory` y `available_actions`.
@@ -1358,6 +1366,8 @@ Las tools devuelven un resultado estructurado. Los errores de validación se dev
 | `INVALID_TICK` | Tick inexistente o futuro. |
 | `AGENT_DEAD` | El agente está muerto. |
 | `AGENT_ABSENT` | El agente conectado está ausente por timeouts; no puede actuar hasta volver a responder. |
+| `TICK_IN_PROGRESS` | El tick actual ya tiene acciones pendientes; el agente debe reintentar la conexión en el siguiente tick. |
+| `SESSION_FINISHED` | El operador finalizó la sesión; no se aceptan más conexiones ni acciones. |
 | `NOT_YOUR_TURN` | La acción no corresponde al agente autenticado. |
 | `INVALID_TARGET` | Objetivo inexistente o no visible. |
 | `OUT_OF_RANGE` | Objetivo fuera de alcance. |

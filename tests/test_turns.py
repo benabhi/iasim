@@ -154,6 +154,34 @@ class TurnEngineTests(unittest.TestCase):
         with self.assertRaises(ActionRejectedError):
             engine.submit(Action(AgentId("ag_01"), 0, ActionKind.MOVE))
 
+    def test_remove_agent_cancels_its_action_and_preserves_others(self) -> None:
+        agents = (_agent("ag_01"), _agent("ag_02", x=2, y=1))
+        engine = TurnEngine(_state(agents), resolvers=_recorder([]))
+        engine.submit(Action(AgentId("ag_01"), 0, ActionKind.MOVE))
+        engine.submit(Action(AgentId("ag_02"), 0, ActionKind.WAIT))
+
+        engine.remove_agent(AgentId("ag_01"))
+
+        self.assertEqual(engine.state.agents, (_agent("ag_02", x=2, y=1),))
+        self.assertEqual(engine.pending_agents, frozenset({AgentId("ag_02")}))
+        result = engine.resolve()
+        self.assertEqual(
+            [action.agent_id for action in result.resolved_actions],
+            ["ag_02"],
+        )
+
+    def test_replace_state_preserves_pending_actions_and_rejects_tick_changes(self) -> None:
+        engine = TurnEngine(_state((_agent("ag_01"),)), resolvers=_recorder([]))
+        engine.submit(Action(AgentId("ag_01"), 0, ActionKind.WAIT))
+        replacement = replace(engine.state, tick_minutes=10)
+
+        engine.replace_state(replacement)
+
+        self.assertEqual(engine.state.tick_minutes, 10)
+        self.assertEqual(engine.pending_agents, frozenset({AgentId("ag_01")}))
+        with self.assertRaises(TurnStateError):
+            engine.replace_state(replace(engine.state, tick=1))
+
     def test_invalid_agents_and_stale_ticks_are_rejected(self) -> None:
         cases = (
             (_agent("ag_01"), Action(AgentId("ag_99"), 0, ActionKind.WAIT)),

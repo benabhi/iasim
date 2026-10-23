@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
-from iasim.app.session import GameSession
+from iasim.app.session import GameSession, SessionPhase
 from iasim.domain.agents import AgentAttributes, AgentProfile
 from iasim.domain.geometry import Position
+from iasim.domain.identifiers import ItemId
+from iasim.domain.items import Inventory, ItemDefinition, ItemStack
 from iasim.domain.tiles import TileType, WorldMap
 from iasim.world.layout import WorldLayout
 
@@ -35,6 +40,23 @@ def _join(session: GameSession, name: str, slot: int = 0) -> dict[str, object]:
 
 
 class GameSessionTests(unittest.TestCase):
+    def test_open_session_waits_without_agents_and_runs_after_join(self) -> None:
+        session = _session()
+
+        self.assertEqual(session.phase, SessionPhase.WAITING)
+        self.assertEqual(session.joined_agents, 0)
+        self.assertEqual(session.alive_agents, 0)
+        self.assertEqual(session.max_agents, 1)
+
+        joined = _join(session, "Nia")
+
+        self.assertTrue(joined["ok"])
+        self.assertEqual(joined["phase"], "running")
+        self.assertEqual(joined["session"]["joined_agents"], 1)
+        self.assertEqual(joined["session"]["max_agents"], 1)
+        self.assertEqual(session.phase, SessionPhase.RUNNING)
+        self.assertEqual(session.health()["phase"], "running")
+
     def test_join_and_observation_do_not_expose_the_map(self) -> None:
         session = _session()
 
@@ -46,6 +68,8 @@ class GameSessionTests(unittest.TestCase):
         self.assertEqual(joined["spawn"], [2, 2])
         self.assertEqual(joined["tick"], 0)
         self.assertEqual(observation["tick"], 0)
+        self.assertEqual(observation["session"]["phase"], "running")
+        self.assertEqual(observation["session"]["joined_agents"], 1)
         self.assertEqual(observation["agent"]["name"], "Nia")
         self.assertEqual(observation["agent"]["pos"], [2, 2])
         self.assertEqual(observation["time"]["day"], 1)
@@ -166,22 +190,25 @@ class GameSessionTests(unittest.TestCase):
         self.assertTrue(joined["ok"])
         self.assertEqual(reused["error"]["code"], "ALREADY_JOINED")
 
-    def test_late_join_is_rejected_by_default_and_allowed_when_enabled(self) -> None:
-        layout = _layout(spawns=(Position(1, 1), Position(3, 3)))
+    def test_joins_are_accepted_between_ticks_and_blocked_mid_tick(self) -> None:
+        layout = _layout(
+            spawns=(Position(1, 1), Position(3, 3), Position(1, 3)),
+        )
         session = _session(layout)
         first = _join(session, "Nia", 0)["agent_id"]
+        second = _join(session, "Kai", 1)["agent_id"]
         session.move(first, 0, 1, 0)
 
-        late = session.join("Kai", session.tokens[1])
-        self.assertEqual(late["error"]["code"], "LATE_JOIN_DISABLED")
+        mid_tick = session.join("Mira", session.tokens[2])
+        self.assertEqual(mid_tick["error"]["code"], "TICK_IN_PROGRESS")
 
-        allowed = _session(layout, allow_late_join=True)
-        first = _join(allowed, "Nia", 0)["agent_id"]
-        allowed.move(first, 0, 1, 0)
-        joined = allowed.join("Kai", allowed.tokens[1])
+        session.wait(second, 0)
+        joined = session.join("Mira", session.tokens[2])
 
         self.assertTrue(joined["ok"])
         self.assertEqual(joined["tick"], 1)
+        self.assertEqual(joined["phase"], "running")
+        self.assertEqual(session.joined_agents, 3)
 
     def test_profiles_configure_agent_slots(self) -> None:
         layout = _layout(spawns=(Position(1, 1), Position(3, 3)))
@@ -203,13 +230,115 @@ class GameSessionTests(unittest.TestCase):
 
     def test_default_profiles_support_one_to_eight_agents(self) -> None:
         session = GameSession(42)
+        agent_ids: list[str] = []
 
         self.assertEqual(len(session.tokens), 8)
         for slot in range(8):
             joined = _join(session, f"Agent{slot + 1}", slot)
             self.assertTrue(joined["ok"])
+            agent_ids.append(str(joined["agent_id"]))
 
         self.assertEqual(session.health()["agents"], 8)
+        self.assertEqual(session.phase, SessionPhase.RUNNING)
+        for agent_id in agent_ids:
+            self.assertTrue(session.wait(agent_id, 0)["ok"])
+        self.assertEqual(session.tick, 1)
+
+    def test_leave_removes_agent_drops_inventory_and_frees_slot(self) -> None:
+        wood = ItemDefinition(ItemId("wood"), 1_000, True, 99)
+        inventory = Inventory(
+            stacks=(ItemStack(wood, 2),),
+            max_slots=10,
+            max_weight_grams=20_000,
+        )
+        profile = AgentProfile(inventory=inventory)
+        session = GameSession(
+            42,
+            max_agents=1,
+            layout=_layout(),
+            profiles=(profile,),
+        )
+        joined = _join(session, "Nia")
+        token = session.tokens[0]
+
+        left = session.leave(joined["agent_id"])
+
+        self.assertTrue(left["ok"])
+        self.assertEqual(left["phase"], "waiting")
+        self.assertEqual(session.state.agents, ())
+        self.assertEqual(session.phase, SessionPhase.WAITING)
+        self.assertEqual(session.joined_agents, 0)
+        self.assertEqual(session.alive_agents, 0)
+        self.assertEqual(len(session.state.ground_items), 1)
+        dropped = session.state.ground_items[0]
+        self.assertEqual(dropped.position, Position(2, 2))
+        self.assertEqual(dropped.stack.definition.item_id, "wood")
+        self.assertEqual(dropped.stack.quantity, 2)
+
+        rejoined = session.join("Nia", token)
+
+        self.assertTrue(rejoined["ok"])
+        self.assertEqual(rejoined["phase"], "running")
+        self.assertEqual(session.joined_agents, 1)
+
+    def test_leave_cancels_only_the_leaving_agents_pending_action(self) -> None:
+        layout = _layout(spawns=(Position(1, 1), Position(3, 3)))
+        session = _session(layout)
+        first = _join(session, "Nia", 0)["agent_id"]
+        second = _join(session, "Kai", 1)["agent_id"]
+        session.move(first, 0, 1, 0)
+
+        left = session.leave(second)
+
+        self.assertTrue(left["ok"])
+        self.assertEqual(left["tick"], 1)
+        self.assertEqual(session.observe(first)["tick"], 1)
+        self.assertEqual(session.state.agents[0].agent_id, first)
+
+    def test_finish_and_restart_create_clean_waiting_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            token_path = Path(directory) / "agents.json"
+            session = _session(token_path=token_path)
+            old_token = session.tokens[0]
+            _join(session, "Nia")
+            session.move("ag_01", 0, 1, 0)
+
+            summary = session.finish()
+            restarted = session.restart(seed=43)
+
+            self.assertEqual(summary["phase"], "finished")
+            self.assertEqual(summary["end_reason"], "operator")
+            self.assertEqual(summary["state_hash"], session.final_state_hash)
+            self.assertEqual(
+                session.move("ag_01", 1, 1, 0)["error"]["code"],
+                "SESSION_FINISHED",
+            )
+            self.assertEqual(restarted.phase, SessionPhase.WAITING)
+            self.assertEqual(restarted.tick, 0)
+            self.assertEqual(restarted.state.agents, ())
+            self.assertEqual(restarted.state.seed, 43)
+            self.assertEqual(restarted.joined_agents, 0)
+            self.assertNotEqual(restarted.tokens, (old_token,))
+            self.assertEqual(
+                json.loads(token_path.read_text(encoding="utf-8"))["seed"],
+                43,
+            )
+            self.assertEqual(
+                restarted.join("Nia", old_token)["error"]["code"],
+                "UNAUTHORIZED",
+            )
+
+        with self.assertRaises(RuntimeError):
+            _session().restart()
+
+    def test_max_agents_is_bounded_to_one_to_eight(self) -> None:
+        self.assertEqual(GameSession(42, max_agents=1).max_agents, 1)
+        self.assertEqual(len(GameSession(42, max_agents=1).tokens), 1)
+        self.assertEqual(GameSession(42).max_agents, 8)
+        with self.assertRaises(ValueError):
+            GameSession(42, max_agents=0)
+        with self.assertRaises(ValueError):
+            GameSession(42, max_agents=9)
 
     def test_profiles_must_fit_available_spawns(self) -> None:
         with self.assertRaises(ValueError):
