@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from iasim.domain.agents import Agent
 from iasim.domain.items import GroundItem
 from iasim.domain.rng import U64_MASK
 from iasim.domain.tiles import WorldMap
+from iasim.domain.weather import WeatherState
 from iasim.domain.world import Structure
 
 
@@ -23,6 +24,7 @@ class SessionState:
     agents: tuple[Agent, ...] = ()
     structures: tuple[Structure, ...] = ()
     ground_items: tuple[GroundItem, ...] = ()
+    weather: WeatherState = field(default_factory=WeatherState)
 
     def __post_init__(self) -> None:
         if self.seed < 0:

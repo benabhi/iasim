@@ -147,6 +147,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 turn_timeout_ms=config.game.turn_timeout_ms,
                 max_agents=config.game.max_agents,
                 token_path=run_dir / "agents.json",
+                weather_min_ticks=config.weather.weather_min_ticks,
+                weather_max_ticks=config.weather.weather_max_ticks,
             )
             run_server(session, host=config.mcp.host, port=config.mcp.port)
         except KeyboardInterrupt:

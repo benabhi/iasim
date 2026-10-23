@@ -33,6 +33,13 @@ from iasim.domain.turns import (
     TurnEngine,
     TurnResult,
 )
+from iasim.domain.weather import (
+    DEFAULT_WEATHER_MAX_TICKS,
+    DEFAULT_WEATHER_MIN_TICKS,
+    WeatherState,
+    advance_weather,
+    apply_weather_wetness,
+)
 from iasim.errors import PersistenceError
 from iasim.world.generation import generate_layout
 from iasim.world.layout import WorldLayout
@@ -72,11 +79,20 @@ class GameSession:
         profiles: Sequence[AgentProfile] | None = None,
         token_path: Path | None = None,
         catalog: Catalog | None = None,
+        weather_min_ticks: int = DEFAULT_WEATHER_MIN_TICKS,
+        weather_max_ticks: int = DEFAULT_WEATHER_MAX_TICKS,
     ) -> None:
         if seed < 0:
             raise ValueError(f"seed must be non-negative, got {seed}")
         if turn_timeout_ms < 1:
             raise ValueError(f"turn_timeout_ms must be positive, got {turn_timeout_ms}")
+        if weather_min_ticks < 1:
+            raise ValueError(f"weather_min_ticks must be positive, got {weather_min_ticks}")
+        if weather_max_ticks < weather_min_ticks:
+            raise ValueError(
+                "weather_max_ticks must be >= weather_min_ticks, "
+                f"got {weather_max_ticks} and {weather_min_ticks}"
+            )
         if max_agents is not None and not 1 <= max_agents <= MAX_AGENTS:
             raise ValueError(f"max_agents must be within [1, {MAX_AGENTS}], got {max_agents}")
 
@@ -111,6 +127,8 @@ class GameSession:
         self._max_agents = configured_max
         self._token_path = token_path
         self._catalog = catalog if catalog is not None else load_catalog()
+        self._weather_min_ticks = weather_min_ticks
+        self._weather_max_ticks = weather_max_ticks
         self._resolvers = {
             **movement_resolvers(),
             **item_action_resolvers(self._catalog),
@@ -125,6 +143,7 @@ class GameSession:
             rng_state=seed & U64_MASK,
             world=self._layout.world,
             tick_minutes=tick_minutes,
+            weather=WeatherState.initial(weather_min_ticks),
         )
         self._engine = TurnEngine(
             self._state,
@@ -511,6 +530,8 @@ class GameSession:
                 profiles=self._profiles,
                 token_path=self._token_path,
                 catalog=self._catalog,
+                weather_min_ticks=self._weather_min_ticks,
+                weather_max_ticks=self._weather_max_ticks,
             )
 
     def health(self) -> dict[str, Any]:
@@ -727,10 +748,10 @@ class GameSession:
                 "equipment": {slot.value: spec.item_id for slot, spec in agent.equipment.items},
             },
             "environment": {
-                "weather": "clear",
-                "temperature_c": 22.0,
-                "wind": 0,
-                "visibility_factor": 1.0,
+                "weather": self._state.weather.kind.value,
+                "temperature_c": self._state.weather.temperature_c,
+                "wind": self._state.weather.wind,
+                "visibility_factor": self._state.weather.visibility_factor,
             },
             "perception": {
                 "visible": visible,
@@ -781,7 +802,19 @@ class GameSession:
         state: SessionState,
         resolved_actions: tuple[ResolvedAction, ...],
     ) -> SessionState:
-        return apply_needs_tick(state, resolved_actions)
+        weather, rng_state = advance_weather(
+            state.weather,
+            state.rng_state,
+            min_ticks=self._weather_min_ticks,
+            max_ticks=self._weather_max_ticks,
+        )
+        state = replace(state, weather=weather, rng_state=rng_state)
+        state = apply_weather_wetness(state)
+        return apply_needs_tick(
+            state,
+            resolved_actions,
+            ambient_temperature_centi=weather.ambient_temperature_centi,
+        )
 
     def _write_tokens(self, path: Path) -> None:
         data = {

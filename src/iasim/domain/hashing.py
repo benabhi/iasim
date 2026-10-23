@@ -35,6 +35,12 @@ def canonical_state_payload(state: SessionState) -> dict[str, Any]:
             "height": state.world.height,
             "tiles": [tile.value for tile in state.world.tiles],
         },
+        "weather": {
+            "kind": state.weather.kind.value,
+            "remaining_ticks": state.weather.remaining_ticks,
+            "wind": state.weather.wind,
+            "ambient_temperature_centi": state.weather.ambient_temperature_centi,
+        },
         "agents": [
             _agent_payload(agent)
             for agent in sorted(state.agents, key=lambda agent: agent.agent_id)
