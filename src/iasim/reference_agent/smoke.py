@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Protocol
 
-from mcp import Client
+from mcp import ClientSession
+from mcp.client import streamable_http
+from mcp.client.streamable_http import streamable_http_client
 
 from iasim.domain.geometry import Position
 from iasim.domain.tiles import TileType
+
+
+class ToolCaller(Protocol):
+    """Minimal MCP tool client used by the smoke agent."""
+
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any: ...
+
 
 _DIRECTIONS: tuple[tuple[int, int], ...] = (
     (1, 0),
@@ -39,7 +48,7 @@ _LAND_TILES = frozenset(
 class SmokeAgent:
     """A deterministic agent that joins and walks for a smoke-test loop."""
 
-    def __init__(self, client: Client, name: str = "Smoke") -> None:
+    def __init__(self, client: ToolCaller, name: str = "Smoke") -> None:
         self._client = client
         self._name = name
         self._agent_id: str | None = None
@@ -71,7 +80,7 @@ class SmokeAgent:
 
     async def observe(self) -> dict[str, Any]:
         """Fetch the current observation."""
-        result = _data(await self._client.call_tool("iasim_observe", {"agent_id": self.agent_id}))
+        result = _data(await self._client.call_tool("iasim_observe", {}))
         if not result.get("ok", True):
             raise RuntimeError(f"observe failed: {result}")
         return result
@@ -83,23 +92,13 @@ class SmokeAgent:
         direction = self._choose_direction(observation)
         if direction is None:
             self._heading = (self._heading + 1) % 8
-            result = _data(
-                await self._client.call_tool(
-                    "iasim_wait",
-                    {"agent_id": self.agent_id, "tick": tick},
-                )
-            )
+            result = _data(await self._client.call_tool("iasim_wait", {"tick": tick}))
         else:
             dx, dy = direction
             result = _data(
                 await self._client.call_tool(
                     "iasim_move",
-                    {
-                        "agent_id": self.agent_id,
-                        "tick": tick,
-                        "dx": dx,
-                        "dy": dy,
-                    },
+                    {"tick": tick, "dx": dx, "dy": dy},
                 )
             )
         if not result.get("ok"):
@@ -158,13 +157,22 @@ class SmokeAgent:
 
 async def run_smoke_agent(
     url: str,
+    token: str,
     *,
     name: str = "Smoke",
     ticks: int = 20,
 ) -> tuple[Position, ...]:
-    """Connect to an MCP server, join, and walk for ``ticks`` moves."""
-    async with Client(url) as client:
-        agent = SmokeAgent(client, name)
+    """Connect with a bearer token, join, and walk for ``ticks`` moves."""
+    headers = {"Authorization": f"Bearer {token}"}
+    async with (
+        streamable_http.create_mcp_http_client(  # type: ignore[attr-defined]
+            headers=headers
+        ) as http_client,
+        streamable_http_client(url, http_client=http_client) as (read_stream, write_stream),
+        ClientSession(read_stream, write_stream) as session,
+    ):
+        await session.initialize()
+        agent = SmokeAgent(session, name)
         await agent.join()
         return await agent.run(ticks=ticks)
 

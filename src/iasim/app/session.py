@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
+import json
+import os
+import secrets
 import threading
 import time
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 from iasim.domain.actions import Action, ActionKind
@@ -15,6 +20,7 @@ from iasim.domain.movement import movement_resolvers
 from iasim.domain.rng import U64_MASK
 from iasim.domain.session import SessionState
 from iasim.domain.turns import ActionRejectedError, TurnEngine, TurnResult
+from iasim.errors import PersistenceError
 from iasim.world.generation import generate_layout
 from iasim.world.layout import WorldLayout
 
@@ -35,6 +41,7 @@ class GameSession:
         turn_timeout_ms: int = DEFAULT_TURN_TIMEOUT_MS,
         allow_late_join: bool = False,
         layout: WorldLayout | None = None,
+        token_path: Path | None = None,
     ) -> None:
         if seed < 0:
             raise ValueError(f"seed must be non-negative, got {seed}")
@@ -53,8 +60,18 @@ class GameSession:
         self._engine = TurnEngine(self._state, resolvers=movement_resolvers())
         self._names: dict[AgentId, str] = {}
         self._last_results: dict[AgentId, dict[str, Any]] = {}
+        self._slot_tokens: tuple[str, ...] = tuple(
+            secrets.token_urlsafe(32) for _ in range(len(self._layout.spawn_points))
+        )
+        self._token_slots: dict[str, int] = {
+            token: slot for slot, token in enumerate(self._slot_tokens)
+        }
+        self._token_agents: dict[str, AgentId] = {}
+        self._joined_slots: set[int] = set()
         self._lock = threading.RLock()
         self._condition = threading.Condition(self._lock)
+        if token_path is not None:
+            self._write_tokens(token_path)
 
     @property
     def state(self) -> SessionState:
@@ -68,9 +85,31 @@ class GameSession:
         with self._lock:
             return self._state.tick
 
-    def join(self, name: str) -> dict[str, Any]:
-        """Join an agent to the session and assign its spawn point."""
+    @property
+    def tokens(self) -> tuple[str, ...]:
+        """Return the slot tokens in spawn order for the run file and tests."""
+        return self._slot_tokens
+
+    def agent_id_for_token(self, token: str) -> AgentId | None:
+        """Return the slot agent id for a valid token, joined or not."""
+        slot = self._token_slots.get(token)
+        if slot is None:
+            return None
+        return AgentId(f"ag_{slot + 1:02d}")
+
+    def agent_for_token(self, token: str) -> AgentId | None:
+        """Return the joined agent id bound to a token."""
+        return self._token_agents.get(token)
+
+    def join(self, name: str, token: str) -> dict[str, Any]:
+        """Join the slot identified by a bearer token."""
         with self._lock:
+            slot = self._token_slots.get(token)
+            if slot is None:
+                return self._error("UNAUTHORIZED", "invalid bearer token")
+            if slot in self._joined_slots:
+                return self._error("ALREADY_JOINED", "this token is already bound to an agent")
+
             clean_name = name.strip()
             if (
                 not clean_name
@@ -85,10 +124,9 @@ class GameSession:
                 return self._error("LATE_JOIN_DISABLED", "late joins are disabled")
             if self._engine.pending_agents:
                 return self._error("LATE_JOIN_DISABLED", "cannot join while actions are pending")
-            if len(self._names) >= len(self._layout.spawn_points):
+            if len(self._joined_slots) >= len(self._layout.spawn_points):
                 return self._error("SESSION_FULL", "no spawn slots remain")
 
-            slot = len(self._names)
             spawn = self._layout.spawn_points[slot]
             agent_id = AgentId(f"ag_{slot + 1:02d}")
             agent = Agent(agent_id, spawn)
@@ -99,6 +137,8 @@ class GameSession:
                 clock=self._engine.clock,
             )
             self._names[agent_id] = clean_name
+            self._joined_slots.add(slot)
+            self._token_agents[token] = agent_id
             return {
                 "ok": True,
                 "schema_version": SCHEMA_VERSION,
@@ -330,6 +370,34 @@ class GameSession:
             (agent for agent in self._state.agents if agent.agent_id == target),
             None,
         )
+
+    def _write_tokens(self, path: Path) -> None:
+        data = {
+            "schema_version": SCHEMA_VERSION,
+            "seed": self._state.seed,
+            "agents": [
+                {
+                    "slot": slot + 1,
+                    "agent_id": f"ag_{slot + 1:02d}",
+                    "spawn": [spawn.x, spawn.y],
+                    "token": token,
+                }
+                for slot, (token, spawn) in enumerate(
+                    zip(self._slot_tokens, self._layout.spawn_points, strict=True)
+                )
+            ],
+        }
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_name(path.name + ".tmp")
+            temporary.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+            with contextlib.suppress(OSError):
+                os.chmod(temporary, 0o600)
+            temporary.replace(path)
+            with contextlib.suppress(OSError):
+                os.chmod(path, 0o600)
+        except OSError as exc:
+            raise PersistenceError(f"cannot write agent tokens to {path}: {exc}") from exc
 
     def _error(
         self,

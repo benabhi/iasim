@@ -16,11 +16,12 @@ def main() -> None:
         default="http://127.0.0.1:8765/mcp",
         help="streamable HTTP MCP endpoint",
     )
+    parser.add_argument("--token", required=True, help="per-agent bearer token")
     parser.add_argument("--name", default="Smoke", help="agent display name")
     parser.add_argument("--ticks", type=int, default=20, help="successful moves to make")
     args = parser.parse_args()
 
-    positions = asyncio.run(run_smoke_agent(args.url, name=args.name, ticks=args.ticks))
+    positions = asyncio.run(run_smoke_agent(args.url, args.token, name=args.name, ticks=args.ticks))
     final = positions[-1]
     print(f"smoke agent made {len(positions) - 1} moves; final position ({final.x}, {final.y})")
 

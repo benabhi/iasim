@@ -29,11 +29,15 @@ def _session(layout: WorldLayout | None = None, **kwargs: object) -> GameSession
     return GameSession(42, layout=layout if layout is not None else _layout(), **kwargs)
 
 
+def _join(session: GameSession, name: str, slot: int = 0) -> dict[str, object]:
+    return session.join(name, session.tokens[slot])
+
+
 class GameSessionTests(unittest.TestCase):
     def test_join_and_observation_do_not_expose_the_map(self) -> None:
         session = _session()
 
-        joined = session.join("Nia")
+        joined = _join(session, "Nia")
         observation = session.observe(joined["agent_id"])
 
         self.assertTrue(joined["ok"])
@@ -54,7 +58,7 @@ class GameSessionTests(unittest.TestCase):
 
     def test_move_advances_tick_and_updates_position(self) -> None:
         session = _session()
-        agent_id = session.join("Nia")["agent_id"]
+        agent_id = _join(session, "Nia")["agent_id"]
 
         result = session.move(agent_id, 0, 1, 0)
         observation = session.observe(agent_id)
@@ -69,7 +73,7 @@ class GameSessionTests(unittest.TestCase):
 
     def test_wait_advances_tick_without_moving(self) -> None:
         session = _session()
-        agent_id = session.join("Nia")["agent_id"]
+        agent_id = _join(session, "Nia")["agent_id"]
         session.move(agent_id, 0, 1, 0)
 
         result = session.wait(agent_id, 1)
@@ -83,7 +87,7 @@ class GameSessionTests(unittest.TestCase):
 
     def test_blocked_move_is_reported_in_the_next_observation(self) -> None:
         session = _session(_layout(blocked=Position(3, 2)))
-        agent_id = session.join("Nia")["agent_id"]
+        agent_id = _join(session, "Nia")["agent_id"]
 
         result = session.move(agent_id, 0, 1, 0)
         observation = session.observe(agent_id)
@@ -97,8 +101,8 @@ class GameSessionTests(unittest.TestCase):
     def test_duplicate_actions_are_rejected_until_all_agents_act(self) -> None:
         layout = _layout(spawns=(Position(1, 1), Position(3, 3)))
         session = _session(layout)
-        first = session.join("Nia")["agent_id"]
-        second = session.join("Kai")["agent_id"]
+        first = _join(session, "Nia", 0)["agent_id"]
+        second = _join(session, "Kai", 1)["agent_id"]
 
         first_move = session.move(first, 0, 1, 0)
         duplicate = session.move(first, 0, 0, 1)
@@ -112,7 +116,7 @@ class GameSessionTests(unittest.TestCase):
 
     def test_stale_and_invalid_actions_are_rejected(self) -> None:
         session = _session()
-        agent_id = session.join("Nia")["agent_id"]
+        agent_id = _join(session, "Nia")["agent_id"]
 
         future = session.move(agent_id, 1, 1, 0)
         unknown = session.move("ag_99", 0, 1, 0)
@@ -129,7 +133,7 @@ class GameSessionTests(unittest.TestCase):
 
     def test_wait_for_tick_returns_new_tick_and_times_out(self) -> None:
         session = _session()
-        agent_id = session.join("Nia")["agent_id"]
+        agent_id = _join(session, "Nia")["agent_id"]
         session.move(agent_id, 0, 1, 0)
 
         fresh = session.wait_for_tick(agent_id, 0, 100)
@@ -142,41 +146,42 @@ class GameSessionTests(unittest.TestCase):
         self.assertFalse(future["ok"])
         self.assertEqual(future["error"]["code"], "INVALID_TICK")
 
-    def test_join_rejects_invalid_names_and_full_sessions(self) -> None:
+    def test_join_rejects_invalid_names_and_reused_tokens(self) -> None:
         session = _session()
+        token = session.tokens[0]
 
-        empty = session.join("  ")
-        control = session.join("bad\nname")
-        long_name = session.join("x" * 41)
-        joined = session.join("Nia")
-        full = session.join("Kai")
+        empty = session.join("  ", token)
+        control = session.join("bad\nname", token)
+        long_name = session.join("x" * 41, token)
+        joined = session.join("Nia", token)
+        reused = session.join("Kai", token)
 
         self.assertEqual(empty["error"]["code"], "INVALID_NAME")
         self.assertEqual(control["error"]["code"], "INVALID_NAME")
         self.assertEqual(long_name["error"]["code"], "INVALID_NAME")
         self.assertTrue(joined["ok"])
-        self.assertEqual(full["error"]["code"], "SESSION_FULL")
+        self.assertEqual(reused["error"]["code"], "ALREADY_JOINED")
 
     def test_late_join_is_rejected_by_default_and_allowed_when_enabled(self) -> None:
         layout = _layout(spawns=(Position(1, 1), Position(3, 3)))
         session = _session(layout)
-        first = session.join("Nia")["agent_id"]
+        first = _join(session, "Nia", 0)["agent_id"]
         session.move(first, 0, 1, 0)
 
-        late = session.join("Kai")
+        late = session.join("Kai", session.tokens[1])
         self.assertEqual(late["error"]["code"], "LATE_JOIN_DISABLED")
 
         allowed = _session(layout, allow_late_join=True)
-        first = allowed.join("Nia")["agent_id"]
+        first = _join(allowed, "Nia", 0)["agent_id"]
         allowed.move(first, 0, 1, 0)
-        joined = allowed.join("Kai")
+        joined = allowed.join("Kai", allowed.tokens[1])
 
         self.assertTrue(joined["ok"])
         self.assertEqual(joined["tick"], 1)
 
     def test_health_has_no_session_secrets(self) -> None:
         session = _session()
-        session.join("Nia")
+        _join(session, "Nia")
 
         health = session.health()
 
