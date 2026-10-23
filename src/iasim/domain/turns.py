@@ -119,6 +119,11 @@ class TurnEngine:
         """Return the simulation clock."""
         return self._clock
 
+    @property
+    def pending_agents(self) -> frozenset[AgentId]:
+        """Return the agents that already submitted an action for this tick."""
+        return frozenset(self._actions)
+
     def submit(self, action: Action) -> None:
         """Queue one primary action for the current tick."""
         if action.tick != self._state.tick:
