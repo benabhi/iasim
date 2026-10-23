@@ -108,6 +108,14 @@ class SessionEndReason(StrEnum):
     OPERATOR = "operator"
 
 
+class SessionWaitReason(StrEnum):
+    """Why an open session is waiting rather than running."""
+
+    NO_AGENTS = "no_agents"
+    NO_ACTIVE_AGENTS = "no_active_agents"
+    LAST_DEATH = "last_death"
+
+
 class GameSession:
     """Single deterministic session exposed to agents through the MCP layer."""
 
@@ -193,6 +201,7 @@ class GameSession:
             **rest_sleep_resolvers(),
         }
         self._phase = SessionPhase.WAITING
+        self._waiting_reason: SessionWaitReason | None = SessionWaitReason.NO_AGENTS
         self._end_reason: SessionEndReason | None = None
         self._final_state_hash: str | None = None
         self._state = SessionState(
@@ -246,6 +255,12 @@ class GameSession:
         """Return the application lifecycle phase."""
         with self._lock:
             return self._phase
+
+    @property
+    def waiting_reason(self) -> SessionWaitReason | None:
+        """Return why the session is waiting, if it is."""
+        with self._lock:
+            return self._waiting_reason
 
     @property
     def max_agents(self) -> int:
@@ -951,6 +966,7 @@ class GameSession:
         with self._lock:
             if self._phase is not SessionPhase.FINISHED:
                 self._phase = SessionPhase.FINISHED
+                self._waiting_reason = None
                 self._end_reason = reason
                 self._final_state_hash = canonical_state_hash(self._state)
                 self._condition.notify_all()
@@ -1067,10 +1083,19 @@ class GameSession:
     def _update_phase_locked(self) -> None:
         if self._phase is SessionPhase.FINISHED:
             return
-        has_active_agent = any(
-            agent.is_alive and agent.status is AgentStatus.ACTIVE for agent in self._state.agents
-        )
-        self._phase = SessionPhase.RUNNING if has_active_agent else SessionPhase.WAITING
+        living = [agent for agent in self._state.agents if agent.is_alive]
+        has_active_agent = any(agent.status is AgentStatus.ACTIVE for agent in living)
+        if has_active_agent:
+            self._phase = SessionPhase.RUNNING
+            self._waiting_reason = None
+            return
+        self._phase = SessionPhase.WAITING
+        if not self._joined_slots and not self._state.agents:
+            self._waiting_reason = SessionWaitReason.NO_AGENTS
+        elif not living:
+            self._waiting_reason = SessionWaitReason.LAST_DEATH
+        else:
+            self._waiting_reason = SessionWaitReason.NO_ACTIVE_AGENTS
 
     def _session_info_locked(self) -> dict[str, Any]:
         info: dict[str, Any] = {
@@ -1079,6 +1104,8 @@ class GameSession:
             "joined_agents": len(self._joined_slots),
             "alive_agents": sum(1 for agent in self._state.agents if agent.is_alive),
         }
+        if self._waiting_reason is not None:
+            info["waiting_reason"] = self._waiting_reason.value
         if self._end_reason is not None:
             info["end_reason"] = self._end_reason.value
         return info
