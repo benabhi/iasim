@@ -36,11 +36,9 @@ Before writing code:
 bd show <issue-id>
 bd update <issue-id> --claim
 git switch main
-git pull --ff-only            # only when a remote exists
+git pull --ff-only
 git switch -c <type>/<issue-id>-<short-slug>
 ```
-
-If a remote does not exist, skip `git pull` and continue locally.
 
 ## 3. Beads workflow
 
@@ -112,12 +110,16 @@ If a command does not exist yet because the project is not scaffolded, record th
 
 ### 3.6 Sync and backup
 
-There is currently no remote configured. Do not fabricate a push.
+GitHub is the code remote; Beads portability uses a tracked issue snapshot.
 
-- When a remote exists: `bd dolt push` after meaningful local work, and `bd dolt pull` before starting.
-- Use `bd sync` only when the remote workflow is configured.
+- GitHub code remote: `origin` → `https://github.com/benabhi/iasim.git`.
+- Versioned Beads snapshot: `beads/issues.jsonl`. It contains issues, labels, dependencies, and comments, but not Dolt history, memories, or infrastructure records.
+- Publish with `python scripts/push_all.py`. It requires a clean `main` branch, exports the current issues, commits only the snapshot if it changed, and then pushes Git. Never use plain `git push` as the final publication step.
+- The script does not run `bd dolt push`. The native local Dolt remote is optional and is not the portable mechanism.
+- Before starting on another machine: clone the Git repository, install `bd`, and run `python scripts/bootstrap_beads.py`. It initializes the local database and imports `beads/issues.jsonl`.
+- `git clone` alone copies code and the issue snapshot, not the live Dolt database.
 - Local durability: `bd export --all` before risky database operations.
-- Never commit `.beads/embeddeddolt/` or other runtime database files.
+- Never commit `.beads/embeddeddolt/`, the Dolt runtime database, other runtime database files, or secrets.
 
 ## 4. Issue quality standard
 
@@ -328,7 +330,7 @@ uv run mypy src
 - Every action is validated against tick, ownership, range, visibility, requirements, and inventory.
 - Agent observations contain only perceived information, never the full map, RNG, or other agents' hidden state.
 - The operator UI may see everything; the MCP surface must not.
-- Death is permanent; corpses are lootable; the session ends when no agents remain.
+- Death is permanent; corpses are lootable; the server remains open when no agents remain and the operator decides when to end the session.
 - All randomness flows through the seeded deterministic RNG.
 - Save, replay, and metrics must reproduce the same canonical state hash.
 - The debug console is operator-only and never exposed through MCP.
@@ -341,11 +343,11 @@ A task is done only when all of the following are true:
 - The implementation is in English, typed, documented, and follows module boundaries.
 - Unit/integration tests pass and the quality gates above are clean.
 - The SRS is updated if behavior or a public contract changed.
-- No secrets, runtime databases, or generated artifacts are staged.
+- No secrets, runtime databases, or generated artifacts are staged, except the intentional `beads/issues.jsonl` snapshot.
 - The branch contains only the issue's changes.
 - `bd close <id> --reason "..."` records the evidence.
 - `git status` is clean except for intentionally untracked, gitignored files.
-- If a remote exists, the branch is pushed and a PR is opened with the issue ID.
+- The approved result is published only through `python scripts/push_all.py`, which refreshes the tracked Beads snapshot and then pushes GitHub. Open a PR when requested.
 
 ## 9. Session close protocol
 
@@ -358,7 +360,8 @@ ruff check .
 ruff format --check .
 mypy src
 git status
-bd epic status <epic-id>    # when the task belongs to an epic
+python scripts/push_all.py   # after approval: refresh snapshot, then push GitHub
+bd epic status <epic-id>     # when the task belongs to an epic
 ```
 
 Then report:
@@ -369,7 +372,7 @@ Then report:
 - Remaining blockers or follow-up issues.
 - Whether a release tag was created.
 
-No remote is configured yet. Do not push, pull, or claim remote sync until the user configures an origin.
+The GitHub remote is configured. Publish only with `python scripts/push_all.py`; never use `git push` alone and never push the Dolt runtime database to Git. The portable Beads state is the tracked `beads/issues.jsonl` snapshot.
 
 ## 10. Two-gate interaction protocol
 
