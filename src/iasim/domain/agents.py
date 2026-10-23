@@ -116,6 +116,7 @@ class Agent:
     status: AgentStatus = AgentStatus.ACTIVE
     sleep_until_tick: int | None = None
     memory: Memory = field(default_factory=Memory)
+    bleeding: bool = False
 
     def __post_init__(self) -> None:
         validate_agent_id(self.agent_id)
@@ -123,6 +124,8 @@ class Agent:
             raise ValueError(f"status must be an AgentStatus, got {self.status!r}")
         if not isinstance(self.memory, Memory):
             raise ValueError(f"memory must be a Memory, got {self.memory!r}")
+        if not isinstance(self.bleeding, bool):
+            raise ValueError(f"bleeding must be a boolean, got {self.bleeding!r}")
         if self.sleep_until_tick is not None and (
             type(self.sleep_until_tick) is not int or self.sleep_until_tick < 0
         ):

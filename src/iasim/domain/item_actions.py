@@ -52,6 +52,9 @@ class ItemActionOutcome(StrEnum):
     AMBIGUOUS_ITEM = "ambiguous_item"
     MISSING_ITEM = "missing_item"
     INVALID_QUANTITY = "invalid_quantity"
+    USED = "used"
+    NOT_USABLE = "not_usable"
+    NOT_NEEDED = "not_needed"
     NOT_FOOD = "not_food"
     NOT_DRINKABLE = "not_drinkable"
     NOT_CONTAINER = "not_container"
@@ -81,6 +84,12 @@ def item_action_resolvers(catalog: Catalog) -> dict[ActionKind, ActionResolver]:
     def fill(state: SessionState, action: Action) -> tuple[SessionState, tuple[TurnEvent, ...]]:
         return resolve_fill(state, action, catalog)
 
+    def use_item(
+        state: SessionState,
+        action: Action,
+    ) -> tuple[SessionState, tuple[TurnEvent, ...]]:
+        return resolve_use_item(state, action, catalog)
+
     return {
         ActionKind.GATHER: gather,
         ActionKind.PICKUP: pickup,
@@ -88,6 +97,7 @@ def item_action_resolvers(catalog: Catalog) -> dict[ActionKind, ActionResolver]:
         ActionKind.EAT: eat,
         ActionKind.DRINK: drink,
         ActionKind.FILL: fill,
+        ActionKind.USE_ITEM: use_item,
     }
 
 
@@ -317,6 +327,34 @@ def resolve_eat(
     return (
         _replace_agent(state, replace(agent, inventory=inventory, attributes=attributes)),
         (_event(action, ItemActionOutcome.ATE),),
+    )
+
+
+def resolve_use_item(
+    state: SessionState,
+    action: Action,
+    catalog: Catalog,
+) -> tuple[SessionState, tuple[TurnEvent, ...]]:
+    """Consume a bandage to stop the agent's bleeding."""
+    item_id = action.payload_dict().get("item_id")
+    if not isinstance(item_id, str) or not item_id:
+        return state, (_event(action, ItemActionOutcome.INVALID_TARGET),)
+    agent = _find_agent(state, action.agent_id)
+    if agent is None:
+        return state, (_event(action, ItemActionOutcome.UNKNOWN_AGENT),)
+    if agent.inventory.stack_for(item_id) is None:
+        return state, (_event(action, ItemActionOutcome.MISSING_ITEM),)
+
+    spec = catalog.item(item_id)
+    if not spec.stops_bleeding:
+        return state, (_event(action, ItemActionOutcome.NOT_USABLE),)
+    if not agent.bleeding:
+        return state, (_event(action, ItemActionOutcome.NOT_NEEDED),)
+
+    inventory = agent.inventory.remove(item_id, 1)
+    return (
+        _replace_agent(state, replace(agent, inventory=inventory, bleeding=False)),
+        (_event(action, ItemActionOutcome.USED),),
     )
 
 

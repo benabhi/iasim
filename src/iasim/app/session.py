@@ -29,6 +29,7 @@ from iasim.domain.combat import combat_resolvers
 from iasim.domain.construction import advance_fires, construction_resolvers
 from iasim.domain.corpse import Corpse
 from iasim.domain.crafting_actions import crafting_resolvers
+from iasim.domain.flee import flee_resolvers
 from iasim.domain.geometry import Position
 from iasim.domain.hashing import canonical_state_hash
 from iasim.domain.identifiers import AgentId
@@ -197,6 +198,7 @@ class GameSession:
             **crafting_resolvers(self._catalog),
             **construction_resolvers(self._catalog),
             **combat_resolvers(),
+            **flee_resolvers(),
             **loot_resolvers(),
             **rest_sleep_resolvers(),
         }
@@ -875,6 +877,15 @@ class GameSession:
             (("recipe_id", recipe_id),),
         )
 
+    def use_item(self, agent_id: str, tick: int, item_id: str) -> dict[str, Any]:
+        """Queue using a consumable such as a bandage."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.USE_ITEM,
+            (("item_id", item_id),),
+        )
+
     def build(
         self,
         agent_id: str,
@@ -907,6 +918,15 @@ class GameSession:
             tick,
             ActionKind.LOOT,
             (("corpse_id", corpse_id),),
+        )
+
+    def flee(self, agent_id: str, tick: int, target_id: str) -> dict[str, Any]:
+        """Queue fleeing up to two cells away from a target."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.FLEE,
+            (("target_id", target_id),),
         )
 
     def _queue(
@@ -1374,7 +1394,9 @@ class GameSession:
                 {"action": "fill", "available": True},
                 {"action": "craft", "available": True},
                 {"action": "build", "available": True},
+                {"action": "use", "available": True},
                 {"action": "attack", "available": True},
+                {"action": "flee", "available": True},
                 {"action": "loot", "available": True},
                 {"action": "rest", "available": True},
                 {"action": "sleep", "available": True},

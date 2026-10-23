@@ -88,6 +88,7 @@ def resolve_attack(
     )
     health = max(0, target.attributes.health_centi - damage * 100)
     dead = health == 0
+    bleeding = target.bleeding or (not dead and rng.chance(0.25))
     attributes = replace(target.attributes, health_centi=health)
     updated_target = replace(
         target,
@@ -96,6 +97,7 @@ def resolve_attack(
         equipment=Equipment() if dead else target.equipment,
         status=AgentStatus.DEAD if dead else target.status,
         sleep_until_tick=None if dead else target.sleep_until_tick,
+        bleeding=bleeding,
     )
     updated_agents = tuple(
         updated_target if agent.agent_id == target.agent_id else agent for agent in state.agents
