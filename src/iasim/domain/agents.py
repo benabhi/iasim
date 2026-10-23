@@ -128,3 +128,31 @@ class Agent:
     def is_alive(self) -> bool:
         """Return whether the agent is not dead."""
         return self.status is not AgentStatus.DEAD
+
+
+@dataclass(frozen=True, slots=True)
+class AgentProfile:
+    """Starting attributes and inventory for one agent slot."""
+
+    attributes: AgentAttributes = field(default_factory=AgentAttributes)
+    inventory: Inventory | None = None
+
+    def build(
+        self,
+        agent_id: AgentId,
+        position: Position,
+        status: AgentStatus = AgentStatus.ACTIVE,
+    ) -> Agent:
+        """Build an agent from this profile."""
+        inventory = (
+            self.inventory
+            if self.inventory is not None
+            else Inventory.for_strength(self.attributes.strength)
+        )
+        return Agent(
+            agent_id,
+            position,
+            attributes=self.attributes,
+            inventory=inventory,
+            status=status,
+        )

@@ -217,6 +217,50 @@ class TurnEngineTests(unittest.TestCase):
         self.assertEqual(engine.clock.tick, 1)
         self.assertEqual(result.state_hash, canonical_state_hash(engine.state))
 
+    def test_tick_effect_runs_after_actions(self) -> None:
+        def effect(
+            state: SessionState,
+            resolved: tuple,
+        ) -> SessionState:
+            agents = tuple(
+                replace(
+                    agent,
+                    attributes=replace(
+                        agent.attributes,
+                        hunger_centi=agent.attributes.hunger_centi + 100,
+                    ),
+                )
+                for agent in state.agents
+            )
+            return replace(state, agents=agents)
+
+        engine = TurnEngine(
+            _state((_agent("ag_01"),)),
+            tick_effect=effect,
+        )
+
+        result = engine.resolve()
+
+        self.assertEqual(engine.state.agents[0].attributes.hunger_centi, 1_600)
+        self.assertEqual(result.state_hash, canonical_state_hash(engine.state))
+
+    def test_tick_effect_cannot_change_tick(self) -> None:
+        def effect(
+            state: SessionState,
+            resolved: tuple,
+        ) -> SessionState:
+            return replace(state, tick=state.tick + 1)
+
+        engine = TurnEngine(
+            _state((_agent("ag_01"),)),
+            tick_effect=effect,
+        )
+
+        with self.assertRaises(TurnStateError):
+            engine.resolve()
+
+        self.assertEqual(engine.tick, 0)
+
     def test_empty_tick_advances_and_changes_hash(self) -> None:
         engine = TurnEngine(_state((_agent("ag_01"),)))
         before = canonical_state_hash(engine.state)

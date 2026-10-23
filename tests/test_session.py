@@ -5,6 +5,7 @@ from __future__ import annotations
 import unittest
 
 from iasim.app.session import GameSession
+from iasim.domain.agents import AgentAttributes, AgentProfile
 from iasim.domain.geometry import Position
 from iasim.domain.tiles import TileType, WorldMap
 from iasim.world.layout import WorldLayout
@@ -70,6 +71,9 @@ class GameSessionTests(unittest.TestCase):
         self.assertEqual(observation["last_action_result"]["status"], "success")
         self.assertEqual(observation["last_action_result"]["action"], "move")
         self.assertEqual(observation["last_action_result"]["outcome"], "moved")
+        self.assertAlmostEqual(observation["agent"]["hunger"], 15.35, places=2)
+        self.assertAlmostEqual(observation["agent"]["thirst"], 15.66, places=2)
+        self.assertAlmostEqual(observation["agent"]["energy"], 79.75, places=2)
 
     def test_wait_advances_tick_without_moving(self) -> None:
         session = _session()
@@ -178,6 +182,44 @@ class GameSessionTests(unittest.TestCase):
 
         self.assertTrue(joined["ok"])
         self.assertEqual(joined["tick"], 1)
+
+    def test_profiles_configure_agent_slots(self) -> None:
+        layout = _layout(spawns=(Position(1, 1), Position(3, 3)))
+        profiles = (
+            AgentProfile(attributes=AgentAttributes(strength=10)),
+            AgentProfile(attributes=AgentAttributes(dexterity=8)),
+        )
+        session = GameSession(42, layout=layout, profiles=profiles)
+
+        first = _join(session, "Strong", 0)
+        second = _join(session, "Quick", 1)
+        first_observation = session.observe(first["agent_id"])
+        second_observation = session.observe(second["agent_id"])
+
+        self.assertEqual(len(session.tokens), 2)
+        self.assertEqual(first_observation["agent"]["strength"], 10)
+        self.assertEqual(first_observation["agent"]["carry_capacity_kg"], 30.0)
+        self.assertEqual(second_observation["agent"]["dexterity"], 8)
+
+    def test_default_profiles_support_one_to_eight_agents(self) -> None:
+        session = GameSession(42)
+
+        self.assertEqual(len(session.tokens), 8)
+        for slot in range(8):
+            joined = _join(session, f"Agent{slot + 1}", slot)
+            self.assertTrue(joined["ok"])
+
+        self.assertEqual(session.health()["agents"], 8)
+
+    def test_profiles_must_fit_available_spawns(self) -> None:
+        with self.assertRaises(ValueError):
+            GameSession(42, layout=_layout(), profiles=())
+        with self.assertRaises(ValueError):
+            GameSession(
+                42,
+                layout=_layout(),
+                profiles=(AgentProfile(), AgentProfile()),
+            )
 
     def test_health_has_no_session_secrets(self) -> None:
         session = _session()

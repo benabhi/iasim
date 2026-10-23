@@ -6,7 +6,7 @@ import ast
 import unittest
 from pathlib import Path
 
-from iasim.domain.agents import Agent, AgentAttributes, AgentStatus
+from iasim.domain.agents import Agent, AgentAttributes, AgentProfile, AgentStatus
 from iasim.domain.geometry import Position
 from iasim.domain.identifiers import AgentId, ItemId
 from iasim.domain.items import (
@@ -274,6 +274,14 @@ class AgentTests(unittest.TestCase):
     def test_rejects_non_enum_status(self) -> None:
         with self.assertRaises(ValueError):
             Agent(AgentId("ag_01"), Position(1, 1), status="active")  # type: ignore[arg-type]
+
+    def test_profile_builds_inventory_for_custom_strength(self) -> None:
+        profile = AgentProfile(attributes=AgentAttributes(strength=10))
+
+        agent = profile.build(AgentId("ag_01"), Position(1, 1))
+
+        self.assertEqual(agent.attributes.strength, 10)
+        self.assertEqual(agent.inventory.max_weight_grams, 30_000)
 
 
 class StructureTests(unittest.TestCase):

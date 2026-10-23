@@ -70,6 +70,16 @@ class ActionResolver(Protocol):
     ) -> tuple[SessionState, tuple[TurnEvent, ...]]: ...
 
 
+class TickEffect(Protocol):
+    """Apply deterministic world or needs effects after all actions resolve."""
+
+    def __call__(
+        self,
+        state: SessionState,
+        resolved_actions: tuple[ResolvedAction, ...],
+    ) -> SessionState: ...
+
+
 def initiative(agent: Agent, seed: int, tick: int, weapon_speed: int = 0) -> int:
     """Return the SRS initiative roll for one agent and tick.
 
@@ -90,6 +100,7 @@ class TurnEngine:
         state: SessionState,
         *,
         resolvers: Mapping[ActionKind, ActionResolver] | None = None,
+        tick_effect: TickEffect | None = None,
         clock: SimulationClock | None = None,
     ) -> None:
         self._state = state
@@ -102,6 +113,7 @@ class TurnEngine:
             raise ValueError("clock tick must match the state")
         self._clock = clock
         self._resolvers = dict(resolvers or {})
+        self._tick_effect = tick_effect
         self._actions: dict[AgentId, Action] = {}
 
     @property
@@ -182,6 +194,14 @@ class TurnEngine:
             self._state = new_state
             resolved.append(ResolvedAction(action.agent_id, action.kind, action_initiative))
             events.extend(new_events)
+
+        if self._tick_effect is not None:
+            new_state = self._tick_effect(self._state, tuple(resolved))
+            if not isinstance(new_state, SessionState):
+                raise TurnStateError("tick effect must return a SessionState")
+            if new_state.tick != closed_tick:
+                raise TurnStateError("tick effect must not change the tick")
+            self._state = new_state
 
         self._clock.advance()
         self._state = replace(self._state, tick=self._clock.tick)

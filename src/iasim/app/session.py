@@ -8,18 +8,25 @@ import os
 import secrets
 import threading
 import time
+from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from iasim.domain.actions import Action, ActionKind
-from iasim.domain.agents import Agent, AgentStatus
+from iasim.domain.agents import Agent, AgentProfile, AgentStatus
 from iasim.domain.geometry import Position
 from iasim.domain.identifiers import AgentId
 from iasim.domain.movement import movement_resolvers
+from iasim.domain.needs import apply_needs_tick
 from iasim.domain.rng import U64_MASK
 from iasim.domain.session import SessionState
-from iasim.domain.turns import ActionRejectedError, TurnEngine, TurnResult
+from iasim.domain.turns import (
+    ActionRejectedError,
+    ResolvedAction,
+    TurnEngine,
+    TurnResult,
+)
 from iasim.errors import PersistenceError
 from iasim.world.generation import generate_layout
 from iasim.world.layout import WorldLayout
@@ -41,6 +48,7 @@ class GameSession:
         turn_timeout_ms: int = DEFAULT_TURN_TIMEOUT_MS,
         allow_late_join: bool = False,
         layout: WorldLayout | None = None,
+        profiles: Sequence[AgentProfile] | None = None,
         token_path: Path | None = None,
     ) -> None:
         if seed < 0:
@@ -48,6 +56,15 @@ class GameSession:
         if turn_timeout_ms < 1:
             raise ValueError(f"turn_timeout_ms must be positive, got {turn_timeout_ms}")
         self._layout = layout if layout is not None else generate_layout(seed, agent_count=8)
+        max_agents = len(profiles) if profiles is not None else len(self._layout.spawn_points)
+        if not 1 <= max_agents <= 8 or max_agents > len(self._layout.spawn_points):
+            raise ValueError(
+                f"profiles must describe 1-8 agents within the available spawns, got {max_agents}"
+            )
+        self._spawns = self._layout.spawn_points[:max_agents]
+        self._profiles = (
+            tuple(profiles) if profiles is not None else tuple(AgentProfile() for _ in self._spawns)
+        )
         self._turn_timeout_ms = turn_timeout_ms
         self._allow_late_join = allow_late_join
         self._state = SessionState(
@@ -57,11 +74,15 @@ class GameSession:
             world=self._layout.world,
             tick_minutes=tick_minutes,
         )
-        self._engine = TurnEngine(self._state, resolvers=movement_resolvers())
+        self._engine = TurnEngine(
+            self._state,
+            resolvers=movement_resolvers(),
+            tick_effect=self._apply_tick_effects,
+        )
         self._names: dict[AgentId, str] = {}
         self._last_results: dict[AgentId, dict[str, Any]] = {}
         self._slot_tokens: tuple[str, ...] = tuple(
-            secrets.token_urlsafe(32) for _ in range(len(self._layout.spawn_points))
+            secrets.token_urlsafe(32) for _ in range(len(self._spawns))
         )
         self._token_slots: dict[str, int] = {
             token: slot for slot, token in enumerate(self._slot_tokens)
@@ -124,16 +145,17 @@ class GameSession:
                 return self._error("LATE_JOIN_DISABLED", "late joins are disabled")
             if self._engine.pending_agents:
                 return self._error("LATE_JOIN_DISABLED", "cannot join while actions are pending")
-            if len(self._joined_slots) >= len(self._layout.spawn_points):
+            if len(self._joined_slots) >= len(self._spawns):
                 return self._error("SESSION_FULL", "no spawn slots remain")
 
-            spawn = self._layout.spawn_points[slot]
+            spawn = self._spawns[slot]
             agent_id = AgentId(f"ag_{slot + 1:02d}")
-            agent = Agent(agent_id, spawn)
+            agent = self._profiles[slot].build(agent_id, spawn)
             self._state = replace(self._state, agents=(*self._state.agents, agent))
             self._engine = TurnEngine(
                 self._state,
                 resolvers=movement_resolvers(),
+                tick_effect=self._apply_tick_effects,
                 clock=self._engine.clock,
             )
             self._names[agent_id] = clean_name
@@ -371,6 +393,13 @@ class GameSession:
             None,
         )
 
+    def _apply_tick_effects(
+        self,
+        state: SessionState,
+        resolved_actions: tuple[ResolvedAction, ...],
+    ) -> SessionState:
+        return apply_needs_tick(state, resolved_actions)
+
     def _write_tokens(self, path: Path) -> None:
         data = {
             "schema_version": SCHEMA_VERSION,
@@ -383,7 +412,7 @@ class GameSession:
                     "token": token,
                 }
                 for slot, (token, spawn) in enumerate(
-                    zip(self._slot_tokens, self._layout.spawn_points, strict=True)
+                    zip(self._slot_tokens, self._spawns, strict=True)
                 )
             ],
         }
