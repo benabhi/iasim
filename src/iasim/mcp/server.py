@@ -140,6 +140,22 @@ def create_server(
         return session.wait(agent_id, tick)
 
     @server.tool()
+    def iasim_rest(tick: int) -> dict[str, Any]:
+        """Rest for one tick and recover energy."""
+        agent_id = _joined_agent(session)
+        if agent_id is None:
+            return _unauthorized(session)
+        return session.rest(agent_id, tick)
+
+    @server.tool()
+    def iasim_sleep(tick: int, until: str | None = None) -> dict[str, Any]:
+        """Sleep until energy_full, dawn, or hours:N."""
+        agent_id = _joined_agent(session)
+        if agent_id is None:
+            return _unauthorized(session)
+        return session.sleep(agent_id, tick, until)
+
+    @server.tool()
     def iasim_gather(
         tick: int,
         x: int,

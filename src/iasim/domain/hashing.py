@@ -81,6 +81,7 @@ def _agent_payload(agent: Agent) -> dict[str, Any]:
         "x": agent.position.x,
         "y": agent.position.y,
         "status": agent.status.value,
+        "sleep_until_tick": agent.sleep_until_tick,
         "attributes": {
             "health_centi": agent.attributes.health_centi,
             "hunger_centi": agent.attributes.hunger_centi,

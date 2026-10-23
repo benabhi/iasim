@@ -132,6 +132,21 @@ def apply_status_tick(state: SessionState) -> SessionState:
             health_centi=health,
             energy_centi=energy,
         )
-        status = AgentStatus.DEAD if health == 0 else agent.status
-        agents.append(replace(agent, attributes=attributes, status=status))
+        if health == 0:
+            status = AgentStatus.DEAD
+            sleep_until_tick = None
+        elif agent.status is AgentStatus.SLEEPING and damage > 0:
+            status = AgentStatus.ACTIVE
+            sleep_until_tick = None
+        else:
+            status = agent.status
+            sleep_until_tick = agent.sleep_until_tick
+        agents.append(
+            replace(
+                agent,
+                attributes=attributes,
+                status=status,
+                sleep_until_tick=sleep_until_tick,
+            )
+        )
     return replace(state, agents=tuple(agents))

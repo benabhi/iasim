@@ -25,6 +25,8 @@ class ActionKind(StrEnum):
     TRADE = "trade"
     ATTACK = "attack"
     WAIT = "wait"
+    REST = "rest"
+    SLEEP = "sleep"
 
     @property
     def order(self) -> int:
@@ -50,6 +52,8 @@ _ACTION_ORDER: dict[ActionKind, int] = {
     ActionKind.TRADE: 5,
     ActionKind.ATTACK: 6,
     ActionKind.WAIT: 7,
+    ActionKind.REST: 7,
+    ActionKind.SLEEP: 7,
 }
 
 

@@ -25,6 +25,8 @@ _ACTIVITY_FACTORS: dict[ActionKind, int] = {
     ActionKind.TRADE: 1200,
     ActionKind.ATTACK: 1500,
     ActionKind.WAIT: 500,
+    ActionKind.REST: 500,
+    ActionKind.SLEEP: 300,
 }
 _REST_ACTIVITY = 500
 _SLEEP_ACTIVITY = 300

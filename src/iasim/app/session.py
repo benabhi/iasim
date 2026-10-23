@@ -28,6 +28,7 @@ from iasim.domain.movement import movement_resolvers
 from iasim.domain.needs import apply_needs_tick
 from iasim.domain.rng import U64_MASK
 from iasim.domain.session import SessionState
+from iasim.domain.sleep import apply_sleep_tick, rest_sleep_resolvers
 from iasim.domain.status import (
     apply_status_tick,
     dexterity_penalty,
@@ -143,6 +144,7 @@ class GameSession:
             **item_action_resolvers(self._catalog),
             **crafting_resolvers(self._catalog),
             **construction_resolvers(self._catalog),
+            **rest_sleep_resolvers(),
         }
         self._phase = SessionPhase.WAITING
         self._end_reason: SessionEndReason | None = None
@@ -368,6 +370,24 @@ class GameSession:
     def wait(self, agent_id: str, tick: int) -> dict[str, Any]:
         """Queue one primary wait action for the current tick."""
         return self._queue(agent_id, tick, ActionKind.WAIT)
+
+    def rest(self, agent_id: str, tick: int) -> dict[str, Any]:
+        """Queue one tick of rest and energy recovery."""
+        return self._queue(agent_id, tick, ActionKind.REST)
+
+    def sleep(
+        self,
+        agent_id: str,
+        tick: int,
+        until: str | None = None,
+    ) -> dict[str, Any]:
+        """Queue sleep until a deterministic wake condition."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.SLEEP,
+            (("until", until),),
+        )
 
     def gather(
         self,
@@ -724,6 +744,8 @@ class GameSession:
                 "filled",
                 "crafted",
                 "built",
+                "rested",
+                "sleeping",
             }
             self._last_results[event.agent_id] = {
                 "tick": result.tick,
@@ -782,6 +804,7 @@ class GameSession:
                 "body_temp_c": attributes.body_temperature_c,
                 "wetness": attributes.wetness,
                 "status": [tag.value for tag in status_tags(agent)],
+                "sleeping": agent.status is AgentStatus.SLEEPING,
                 "strength": max(0, attributes.strength - strength_penalty(attributes)),
                 "dexterity": max(
                     0,
@@ -831,6 +854,8 @@ class GameSession:
                 {"action": "fill", "available": True},
                 {"action": "craft", "available": True},
                 {"action": "build", "available": True},
+                {"action": "rest", "available": True},
+                {"action": "sleep", "available": True},
             ],
         }
         last_result = self._last_results.get(agent.agent_id)
@@ -865,6 +890,7 @@ class GameSession:
             resolved_actions,
             ambient_temperature_centi=weather.ambient_temperature_centi,
         )
+        state = apply_sleep_tick(state)
         return apply_status_tick(state)
 
     def _write_tokens(self, path: Path) -> None:

@@ -30,6 +30,8 @@ TOOL_NAMES = {
     "iasim_move",
     "iasim_move_to",
     "iasim_wait",
+    "iasim_rest",
+    "iasim_sleep",
     "iasim_gather",
     "iasim_pickup",
     "iasim_drop",
