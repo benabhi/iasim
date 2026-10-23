@@ -68,8 +68,9 @@ bd blocked
 
 ### 3.3 Record decisions and progress
 
-- `bd note <id> "..."` for implementation notes.
-- `bd comment <id> "..."` for review/audit discussion.
+- `bd note <id> "..."` for short private working notes.
+- `bd comment <id> "..."` is the implementation journal and is required for every issue. Record what was done, why, the files or commands changed, verification evidence, key decisions or trade-offs, and follow-ups. Add one comment per meaningful update; keep it concise and in English. Never include secrets or full logs.
+- Before closing, add a final `bd comment` with the evidence used in the close reason.
 - `bd remember "..."` for durable project knowledge that future sessions need.
 - `bd memories <query>` before re-litigating an old decision.
 - Use `bd supersede` or `bd duplicate`; never delete history merely to hide a mistake.
@@ -93,6 +94,8 @@ ruff format --check .
 mypy src
 git status
 ```
+
+Add the final evidence comment before running `bd close`; do not substitute a close reason for the implementation journal.
 
 If a command does not exist yet because the project is not scaffolded, record that in the issue and close only the setup portion that is actually complete. Never claim a test passed when it was not run.
 
