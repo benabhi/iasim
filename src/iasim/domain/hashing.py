@@ -7,7 +7,9 @@ import json
 from typing import Any
 
 from iasim.domain.agents import Agent
+from iasim.domain.corpse import Corpse
 from iasim.domain.items import GroundItem, ItemStack
+from iasim.domain.resources import ResourceNode
 from iasim.domain.session import SessionState
 from iasim.domain.world import Structure
 
@@ -34,6 +36,12 @@ def canonical_state_payload(state: SessionState) -> dict[str, Any]:
             "width": state.world.width,
             "height": state.world.height,
             "tiles": [tile.value for tile in state.world.tiles],
+        },
+        "weather": {
+            "kind": state.weather.kind.value,
+            "remaining_ticks": state.weather.remaining_ticks,
+            "wind": state.weather.wind,
+            "ambient_temperature_centi": state.weather.ambient_temperature_centi,
         },
         "agents": [
             _agent_payload(agent)
@@ -62,8 +70,24 @@ def canonical_state_payload(state: SessionState) -> dict[str, Any]:
                     item.stack.definition.stackable,
                     item.stack.definition.max_stack,
                     item.stack.quantity,
+                    item.stack.charges,
                 ),
             )
+        ],
+        "resource_nodes": [
+            _resource_node_payload(node)
+            for node in sorted(
+                state.resource_nodes,
+                key=lambda node: (
+                    node.position.y,
+                    node.position.x,
+                    node.resource_id,
+                ),
+            )
+        ],
+        "corpses": [
+            _corpse_payload(corpse)
+            for corpse in sorted(state.corpses, key=lambda corpse: corpse.corpse_id)
         ],
     }
 
@@ -74,6 +98,9 @@ def _agent_payload(agent: Agent) -> dict[str, Any]:
         "x": agent.position.x,
         "y": agent.position.y,
         "status": agent.status.value,
+        "sleep_until_tick": agent.sleep_until_tick,
+        "bleeding": agent.bleeding,
+        "memory": _memory_payload(agent),
         "attributes": {
             "health_centi": agent.attributes.health_centi,
             "hunger_centi": agent.attributes.hunger_centi,
@@ -104,6 +131,33 @@ def _agent_payload(agent: Agent) -> dict[str, Any]:
     }
 
 
+def _memory_payload(agent: Agent) -> dict[str, Any]:
+    return {
+        "tiles": [
+            {
+                "x": entry.position.x,
+                "y": entry.position.y,
+                "tile": entry.tile.value,
+                "last_seen_tick": entry.last_seen_tick,
+                "resources": list(entry.resources),
+                "structure": entry.structure.value if entry.structure is not None else None,
+                "stale": entry.stale,
+            }
+            for entry in agent.memory.tiles
+        ],
+        "agents": [
+            {
+                "agent_id": entry.agent_id,
+                "x": entry.position.x,
+                "y": entry.position.y,
+                "last_seen_tick": entry.last_seen_tick,
+                "stale": entry.stale,
+            }
+            for entry in agent.memory.agents
+        ],
+    }
+
+
 def _stack_payload(stack: ItemStack) -> dict[str, Any]:
     return {
         "item_id": stack.definition.item_id,
@@ -111,6 +165,7 @@ def _stack_payload(stack: ItemStack) -> dict[str, Any]:
         "stackable": stack.definition.stackable,
         "max_stack": stack.definition.max_stack,
         "quantity": stack.quantity,
+        "charges": stack.charges,
     }
 
 
@@ -119,6 +174,8 @@ def _structure_payload(structure: Structure) -> dict[str, Any]:
         "kind": structure.kind.value,
         "x": structure.position.x,
         "y": structure.position.y,
+        "fuel": structure.fuel,
+        "lit": structure.lit,
     }
 
 
@@ -127,4 +184,38 @@ def _ground_item_payload(item: GroundItem) -> dict[str, Any]:
         "x": item.position.x,
         "y": item.position.y,
         **_stack_payload(item.stack),
+    }
+
+
+def _corpse_payload(corpse: Corpse) -> dict[str, Any]:
+    return {
+        "corpse_id": corpse.corpse_id,
+        "agent_id": corpse.agent_id,
+        "x": corpse.position.x,
+        "y": corpse.position.y,
+        "death_tick": corpse.death_tick,
+        "cause": corpse.cause,
+        "killer_id": corpse.killer_id,
+        "inventory": [
+            _stack_payload(stack)
+            for stack in sorted(
+                corpse.inventory.stacks,
+                key=lambda stack: stack.definition.item_id,
+            )
+        ],
+        "equipment": [
+            {"slot": slot.value, "item_id": spec.item_id}
+            for slot, spec in sorted(corpse.equipment.items, key=lambda entry: entry[0].value)
+        ],
+    }
+
+
+def _resource_node_payload(node: ResourceNode) -> dict[str, Any]:
+    return {
+        "x": node.position.x,
+        "y": node.position.y,
+        "resource_id": node.resource_id,
+        "remaining": node.remaining,
+        "capacity": node.capacity,
+        "regrow_at_tick": node.regrow_at_tick,
     }

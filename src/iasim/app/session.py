@@ -4,41 +4,95 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import secrets
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from iasim.crafting import Catalog, load_catalog
 from iasim.domain.actions import Action, ActionKind
 from iasim.domain.agents import Agent, AgentProfile, AgentStatus
+from iasim.domain.chat import (
+    MAX_CHAT_MESSAGE_LENGTH,
+    ChatMessage,
+    sanitize_chat_text,
+    within_chat_radius,
+)
+from iasim.domain.climate import apply_climate_tick, effective_vision
+from iasim.domain.combat import combat_resolvers
+from iasim.domain.construction import advance_fires, construction_resolvers
+from iasim.domain.corpse import Corpse
+from iasim.domain.crafting_actions import crafting_resolvers
+from iasim.domain.flee import flee_resolvers
 from iasim.domain.geometry import Position
 from iasim.domain.hashing import canonical_state_hash
 from iasim.domain.identifiers import AgentId
-from iasim.domain.items import GroundItem, ItemStack
+from iasim.domain.item_actions import item_action_resolvers
+from iasim.domain.items import Equipment, GroundItem, Inventory, ItemStack
+from iasim.domain.loot import loot_resolvers
+from iasim.domain.memory import AgentMemory, MemoryEntry
+from iasim.domain.mind import (
+    MAX_INTENT_LENGTH,
+    MAX_PLAN_LENGTH,
+    MAX_THOUGHT_LENGTH,
+    MindReport,
+)
 from iasim.domain.movement import movement_resolvers
 from iasim.domain.needs import apply_needs_tick
+from iasim.domain.resources import (
+    advance_resource_nodes,
+    available_resource_ids,
+    initial_resource_nodes,
+)
 from iasim.domain.rng import U64_MASK
 from iasim.domain.session import SessionState
+from iasim.domain.sleep import apply_sleep_tick, rest_sleep_resolvers
+from iasim.domain.status import (
+    apply_status_tick,
+    dexterity_penalty,
+    status_tags,
+    strength_penalty,
+)
+from iasim.domain.text import sanitize_text
 from iasim.domain.turns import (
     ActionRejectedError,
     ResolvedAction,
     TurnEngine,
     TurnResult,
 )
+from iasim.domain.usage import AgentUsage, CostSource, ModelPricing, UsageEntry
+from iasim.domain.weather import (
+    DEFAULT_WEATHER_MAX_TICKS,
+    DEFAULT_WEATHER_MIN_TICKS,
+    WeatherState,
+    advance_weather,
+    apply_weather_wetness,
+)
 from iasim.errors import PersistenceError
 from iasim.world.generation import generate_layout
 from iasim.world.layout import WorldLayout
+from iasim.world.pathfinding_actions import move_to_resolvers
+from iasim.world.tcod_fov import compute_fov
 
 SCHEMA_VERSION = "1.0"
-PERCEPTION_RADIUS = 3
 MAX_NAME_LENGTH = 40
 DEFAULT_TURN_TIMEOUT_MS = 60_000
 MAX_AGENTS = 8
+
+
+def _health_band(health: float) -> str:
+    """Return a coarse health band for perception-limited observations."""
+    if health >= 70:
+        return "healthy"
+    if health >= 40:
+        return "hurt"
+    return "critical"
 
 
 class SessionPhase(StrEnum):
@@ -55,6 +109,14 @@ class SessionEndReason(StrEnum):
     OPERATOR = "operator"
 
 
+class SessionWaitReason(StrEnum):
+    """Why an open session is waiting rather than running."""
+
+    NO_AGENTS = "no_agents"
+    NO_ACTIVE_AGENTS = "no_active_agents"
+    LAST_DEATH = "last_death"
+
+
 class GameSession:
     """Single deterministic session exposed to agents through the MCP layer."""
 
@@ -68,11 +130,23 @@ class GameSession:
         layout: WorldLayout | None = None,
         profiles: Sequence[AgentProfile] | None = None,
         token_path: Path | None = None,
+        catalog: Catalog | None = None,
+        weather_min_ticks: int = DEFAULT_WEATHER_MIN_TICKS,
+        weather_max_ticks: int = DEFAULT_WEATHER_MAX_TICKS,
+        usage_pricing: Mapping[str, ModelPricing] | None = None,
+        mind_log_path: Path | None = None,
     ) -> None:
         if seed < 0:
             raise ValueError(f"seed must be non-negative, got {seed}")
         if turn_timeout_ms < 1:
             raise ValueError(f"turn_timeout_ms must be positive, got {turn_timeout_ms}")
+        if weather_min_ticks < 1:
+            raise ValueError(f"weather_min_ticks must be positive, got {weather_min_ticks}")
+        if weather_max_ticks < weather_min_ticks:
+            raise ValueError(
+                "weather_max_ticks must be >= weather_min_ticks, "
+                f"got {weather_max_ticks} and {weather_min_ticks}"
+            )
         if max_agents is not None and not 1 <= max_agents <= MAX_AGENTS:
             raise ValueError(f"max_agents must be within [1, {MAX_AGENTS}], got {max_agents}")
 
@@ -106,7 +180,30 @@ class GameSession:
         self._turn_timeout_ms = turn_timeout_ms
         self._max_agents = configured_max
         self._token_path = token_path
+        self._catalog = catalog if catalog is not None else load_catalog()
+        self._weather_min_ticks = weather_min_ticks
+        self._weather_max_ticks = weather_max_ticks
+        self._usage_pricing = dict(usage_pricing or {})
+        self._usage: dict[AgentId, list[UsageEntry]] = {}
+        self._mind_log_path = mind_log_path
+        self._mind_reports: dict[AgentId, MindReport] = {}
+        self._mind_tick: dict[AgentId, int] = {}
+        self._pending_chat: list[ChatMessage] = []
+        self._delivered_chat: list[ChatMessage] = []
+        self._said_tick: dict[AgentId, int] = {}
+        self._resolvers = {
+            **movement_resolvers(),
+            **move_to_resolvers(),
+            **item_action_resolvers(self._catalog),
+            **crafting_resolvers(self._catalog),
+            **construction_resolvers(self._catalog),
+            **combat_resolvers(),
+            **flee_resolvers(),
+            **loot_resolvers(),
+            **rest_sleep_resolvers(),
+        }
         self._phase = SessionPhase.WAITING
+        self._waiting_reason: SessionWaitReason | None = SessionWaitReason.NO_AGENTS
         self._end_reason: SessionEndReason | None = None
         self._final_state_hash: str | None = None
         self._state = SessionState(
@@ -115,10 +212,12 @@ class GameSession:
             rng_state=seed & U64_MASK,
             world=self._layout.world,
             tick_minutes=tick_minutes,
+            weather=WeatherState.initial(weather_min_ticks),
+            resource_nodes=initial_resource_nodes(self._layout.world, self._catalog),
         )
         self._engine = TurnEngine(
             self._state,
-            resolvers=movement_resolvers(),
+            resolvers=self._resolvers,
             tick_effect=self._apply_tick_effects,
         )
         self._names: dict[AgentId, str] = {}
@@ -158,6 +257,12 @@ class GameSession:
         """Return the application lifecycle phase."""
         with self._lock:
             return self._phase
+
+    @property
+    def waiting_reason(self) -> SessionWaitReason | None:
+        """Return why the session is waiting, if it is."""
+        with self._lock:
+            return self._waiting_reason
 
     @property
     def max_agents(self) -> int:
@@ -240,11 +345,15 @@ class GameSession:
             self._state = replace(self._state, agents=(*self._state.agents, agent))
             self._engine = TurnEngine(
                 self._state,
-                resolvers=movement_resolvers(),
+                resolvers=self._resolvers,
                 tick_effect=self._apply_tick_effects,
                 clock=self._engine.clock,
             )
             self._names[agent_id] = clean_name
+            self._usage.pop(agent_id, None)
+            self._said_tick.pop(agent_id, None)
+            self._mind_reports.pop(agent_id, None)
+            self._mind_tick.pop(agent_id, None)
             self._joined_slots.add(slot)
             self._token_agents[token] = agent_id
             self._update_phase_locked()
@@ -281,6 +390,10 @@ class GameSession:
             self._drop_inventory_locked(agent)
             self._names.pop(target, None)
             self._last_results.pop(target, None)
+            self._usage.pop(target, None)
+            self._said_tick.pop(target, None)
+            self._mind_reports.pop(target, None)
+            self._mind_tick.pop(target, None)
             if token is not None:
                 self._token_agents.pop(token, None)
                 slot = self._token_slots.get(token)
@@ -308,27 +421,525 @@ class GameSession:
                 return self._error("NOT_YOUR_TURN", "agent is not joined")
             return self._observation(agent)
 
+    def report_usage(
+        self,
+        agent_id: str,
+        tick: int,
+        *,
+        input_tokens: int,
+        output_tokens: int,
+        model: str,
+        reasoning_effort: str | None = None,
+        cost_usd: float | None = None,
+    ) -> dict[str, Any]:
+        """Accumulate an agent-reported LLM usage record for the operator."""
+        with self._lock:
+            target = AgentId(agent_id)
+            agent = self._find_agent(agent_id)
+            if target not in self._names or agent is None:
+                return self._error("NOT_YOUR_TURN", "agent is not joined")
+            if self._phase is SessionPhase.FINISHED:
+                return self._error("SESSION_FINISHED", "the session has ended")
+            if (
+                isinstance(tick, bool)
+                or not isinstance(tick, int)
+                or not 0 <= tick <= self._state.tick
+            ):
+                return self._error(
+                    "INVALID_TICK", "usage tick must be between 0 and the current tick"
+                )
+            for label, value in (
+                ("input_tokens", input_tokens),
+                ("output_tokens", output_tokens),
+            ):
+                if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                    return self._error(
+                        "INVALID_USAGE",
+                        f"{label} must be a non-negative integer",
+                    )
+            if not isinstance(model, str):
+                return self._error("INVALID_USAGE", "model must be a string")
+            clean_model = model.strip()
+            if (
+                not clean_model
+                or len(clean_model) > 80
+                or any(not character.isprintable() for character in clean_model)
+            ):
+                return self._error(
+                    "INVALID_USAGE",
+                    "model must be 1-80 printable characters",
+                )
+            clean_effort: str | None = None
+            if reasoning_effort is not None:
+                if not isinstance(reasoning_effort, str):
+                    return self._error("INVALID_USAGE", "reasoning_effort must be a string")
+                candidate = reasoning_effort.strip()
+                if candidate:
+                    if len(candidate) > 32 or any(
+                        not character.isprintable() for character in candidate
+                    ):
+                        return self._error(
+                            "INVALID_USAGE",
+                            "reasoning_effort must be 1-32 printable characters",
+                        )
+                    clean_effort = candidate
+            if cost_usd is not None:
+                if isinstance(cost_usd, bool) or not isinstance(cost_usd, (int, float)):
+                    return self._error("INVALID_USAGE", "cost_usd must be a number")
+                reported_cost = float(cost_usd)
+                if not math.isfinite(reported_cost) or reported_cost < 0:
+                    return self._error(
+                        "INVALID_USAGE",
+                        "cost_usd must be finite and non-negative",
+                    )
+                entry_cost: float | None = reported_cost
+                cost_source = CostSource.REPORTED
+            else:
+                pricing = self._usage_pricing.get(clean_model)
+                if pricing is None:
+                    entry_cost = None
+                    cost_source = CostSource.UNKNOWN
+                else:
+                    entry_cost = pricing.estimate(input_tokens, output_tokens)
+                    cost_source = CostSource.ESTIMATED
+            try:
+                entry = UsageEntry(
+                    model=clean_model,
+                    reasoning_effort=clean_effort,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_usd=entry_cost,
+                    cost_source=cost_source,
+                    cost_complete=entry_cost is not None,
+                )
+            except ValueError as exc:
+                return self._error("INVALID_USAGE", str(exc))
+            bucket = self._usage.setdefault(target, [])
+            for index, current in enumerate(bucket):
+                if (current.model, current.reasoning_effort) == (
+                    clean_model,
+                    clean_effort,
+                ):
+                    merged = current.merged_with(entry)
+                    del bucket[index]
+                    bucket.append(merged)
+                    break
+            else:
+                bucket.append(entry)
+            usage = AgentUsage(tuple(bucket))
+            return {
+                "ok": True,
+                "schema_version": SCHEMA_VERSION,
+                "tick": self._state.tick,
+                "usage": usage.as_dict(),
+            }
+
+    def usage_for(self, agent_id: str) -> AgentUsage | None:
+        """Return accumulated usage for a joined agent, or None if not joined."""
+        with self._lock:
+            target = AgentId(agent_id)
+            if target not in self._names:
+                return None
+            return AgentUsage(tuple(self._usage.get(target, ())))
+
+    def usage_snapshot(self) -> dict[AgentId, AgentUsage]:
+        """Return accumulated usage for every agent that has reported it."""
+        with self._lock:
+            return {
+                agent_id: AgentUsage(tuple(entries))
+                for agent_id, entries in self._usage.items()
+                if entries
+            }
+
+    def say(
+        self,
+        agent_id: str,
+        message: str,
+        target_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Queue one sanitized local chat message for next-tick delivery."""
+        with self._lock:
+            target = AgentId(agent_id)
+            agent = self._find_agent(agent_id)
+            if target not in self._names or agent is None:
+                return self._error("NOT_YOUR_TURN", "agent is not joined")
+            if self._phase is SessionPhase.FINISHED:
+                return self._error("SESSION_FINISHED", "the session has ended")
+            if not agent.is_alive:
+                return self._error("AGENT_DEAD", "agent is dead")
+            if agent.status is AgentStatus.ABSENT:
+                return self._error("AGENT_ABSENT", "agent is absent")
+            if self._said_tick.get(target) == self._state.tick:
+                return self._error("ALREADY_SAID", "agent already spoke this tick")
+            if not isinstance(message, str):
+                return self._error("INVALID_MESSAGE", "message must be a string")
+            if len(message) > MAX_CHAT_MESSAGE_LENGTH:
+                return self._error(
+                    "MESSAGE_TOO_LONG",
+                    f"chat messages are limited to {MAX_CHAT_MESSAGE_LENGTH} characters",
+                )
+            text = sanitize_chat_text(message)
+            if not text:
+                return self._error("INVALID_MESSAGE", "message is empty after sanitization")
+
+            target_agent_id: AgentId | None = None
+            if target_id is not None:
+                if not isinstance(target_id, str) or not target_id:
+                    return self._error("INVALID_TARGET", "target_id must be a non-empty string")
+                target_agent_id = AgentId(target_id)
+                recipient = self._find_agent(str(target_agent_id))
+                if recipient is None or not recipient.is_alive or recipient.agent_id == target:
+                    return self._error("INVALID_TARGET", "chat target is not a living agent")
+                if not within_chat_radius(agent.position, recipient.position):
+                    return self._error(
+                        "NOT_IN_RANGE",
+                        "chat target is outside the social radius",
+                    )
+                recipients: tuple[AgentId, ...] = (recipient.agent_id,)
+            else:
+                recipients = tuple(
+                    sorted(
+                        other.agent_id
+                        for other in self._state.agents
+                        if other.agent_id != target
+                        and other.is_alive
+                        and within_chat_radius(agent.position, other.position)
+                    )
+                )
+
+            self._pending_chat.append(
+                ChatMessage(
+                    sender_id=target,
+                    recipients=recipients,
+                    text=text,
+                    sent_tick=self._state.tick,
+                    deliver_tick=self._state.tick + 1,
+                    target_id=target_agent_id,
+                )
+            )
+            self._said_tick[target] = self._state.tick
+            return {
+                "ok": True,
+                "schema_version": SCHEMA_VERSION,
+                "tick": self._state.tick,
+                "status": "queued",
+            }
+
+    def report_mind(
+        self,
+        agent_id: str,
+        tick: int,
+        *,
+        intent: str,
+        thought: str,
+        plan: str | None = None,
+        confidence: int | None = None,
+    ) -> dict[str, Any]:
+        """Record one sanitized mind report for the current tick."""
+        with self._lock:
+            target = AgentId(agent_id)
+            agent = self._find_agent(agent_id)
+            if target not in self._names or agent is None:
+                return self._error("NOT_YOUR_TURN", "agent is not joined")
+            if self._phase is SessionPhase.FINISHED:
+                return self._error("SESSION_FINISHED", "the session has ended")
+            if not agent.is_alive:
+                return self._error("AGENT_DEAD", "agent is dead")
+            if agent.status is AgentStatus.ABSENT:
+                return self._error("AGENT_ABSENT", "agent is absent")
+            if isinstance(tick, bool) or not isinstance(tick, int) or tick < 0:
+                return self._error("INVALID_TICK", "mind report tick must be non-negative")
+            if tick > self._state.tick:
+                return self._error("INVALID_TICK", "mind report tick is in the future")
+            if tick < self._state.tick:
+                return self._error("STALE_TICK", "mind report tick is stale")
+            if self._mind_tick.get(target) == tick:
+                return self._error("ALREADY_REPORTED", "agent already reported this tick")
+            if not isinstance(intent, str) or not isinstance(thought, str):
+                return self._error("INVALID_MIND_REPORT", "intent and thought must be strings")
+            clean_intent = sanitize_text(intent)
+            clean_thought = sanitize_text(thought)
+            if not clean_intent or not clean_thought:
+                return self._error(
+                    "INVALID_MIND_REPORT",
+                    "intent and thought must not be empty after sanitization",
+                )
+            if len(clean_intent) > MAX_INTENT_LENGTH:
+                return self._error(
+                    "MESSAGE_TOO_LONG",
+                    f"intent is limited to {MAX_INTENT_LENGTH} characters",
+                )
+            if len(clean_thought) > MAX_THOUGHT_LENGTH:
+                return self._error(
+                    "MESSAGE_TOO_LONG",
+                    f"thought is limited to {MAX_THOUGHT_LENGTH} characters",
+                )
+            clean_plan: str | None = None
+            if plan is not None:
+                if not isinstance(plan, str):
+                    return self._error("INVALID_MIND_REPORT", "plan must be a string")
+                clean_plan = sanitize_text(plan) or None
+                if clean_plan is not None and len(clean_plan) > MAX_PLAN_LENGTH:
+                    return self._error(
+                        "MESSAGE_TOO_LONG",
+                        f"plan is limited to {MAX_PLAN_LENGTH} characters",
+                    )
+            if confidence is not None and (
+                isinstance(confidence, bool)
+                or not isinstance(confidence, int)
+                or not 0 <= confidence <= 100
+            ):
+                return self._error(
+                    "INVALID_MIND_REPORT",
+                    "confidence must be an integer within [0, 100]",
+                )
+            try:
+                report = MindReport(
+                    agent_id=target,
+                    tick=tick,
+                    intent=clean_intent,
+                    thought=clean_thought,
+                    plan=clean_plan,
+                    confidence=confidence,
+                )
+                self._append_mind_log_locked(report)
+            except (PersistenceError, ValueError) as exc:
+                return self._error("INTERNAL_ERROR", f"cannot record mind report: {exc}")
+            self._mind_reports[target] = report
+            self._mind_tick[target] = tick
+            return {
+                "ok": True,
+                "schema_version": SCHEMA_VERSION,
+                "tick": tick,
+                "status": "recorded",
+            }
+
+    def mind_report_for(self, agent_id: str) -> MindReport | None:
+        """Return the latest operator-visible report for a joined agent."""
+        with self._lock:
+            target = AgentId(agent_id)
+            if target not in self._names:
+                return None
+            return self._mind_reports.get(target)
+
+    def mind_reports_snapshot(self) -> dict[AgentId, MindReport]:
+        """Return latest mind reports for all reporting agents."""
+        with self._lock:
+            return dict(self._mind_reports)
+
+    def _append_mind_log_locked(self, report: MindReport) -> None:
+        if self._mind_log_path is None:
+            return
+        try:
+            self._mind_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._mind_log_path.open("a", encoding="utf-8") as handle:
+                handle.write(
+                    json.dumps(
+                        report.as_log_record(SCHEMA_VERSION),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                )
+        except OSError as exc:
+            raise PersistenceError(
+                f"cannot append mind report to {self._mind_log_path}: {exc}"
+            ) from exc
+
     def move(self, agent_id: str, tick: int, dx: int, dy: int) -> dict[str, Any]:
         """Queue one primary move action for the current tick."""
-        if AgentId(agent_id) not in self._names:
-            return self._error("NOT_YOUR_TURN", "agent is not joined")
-        try:
-            action = Action(
-                AgentId(agent_id),
-                tick,
-                ActionKind.MOVE,
-                (("dx", dx), ("dy", dy)),
-            )
-        except ValueError as exc:
-            return self._error("INVALID_TICK", str(exc), tick=tick)
-        return self._submit(agent_id, action)
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.MOVE,
+            (("dx", dx), ("dy", dy)),
+        )
+
+    def move_to(self, agent_id: str, tick: int, x: int, y: int) -> dict[str, Any]:
+        """Queue one step along a deterministic route to a target tile."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.MOVE_TO,
+            (("x", x), ("y", y)),
+        )
 
     def wait(self, agent_id: str, tick: int) -> dict[str, Any]:
         """Queue one primary wait action for the current tick."""
+        return self._queue(agent_id, tick, ActionKind.WAIT)
+
+    def rest(self, agent_id: str, tick: int) -> dict[str, Any]:
+        """Queue one tick of rest and energy recovery."""
+        return self._queue(agent_id, tick, ActionKind.REST)
+
+    def sleep(
+        self,
+        agent_id: str,
+        tick: int,
+        until: str | None = None,
+    ) -> dict[str, Any]:
+        """Queue sleep until a deterministic wake condition."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.SLEEP,
+            (("until", until),),
+        )
+
+    def gather(
+        self,
+        agent_id: str,
+        tick: int,
+        x: int,
+        y: int,
+        node_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Queue a gather action on one adjacent resource tile."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.GATHER,
+            (("x", x), ("y", y), ("node_id", node_id)),
+        )
+
+    def pickup(
+        self,
+        agent_id: str,
+        tick: int,
+        x: int,
+        y: int,
+        item_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Queue a ground-item pickup from the current or an adjacent tile."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.PICKUP,
+            (("x", x), ("y", y), ("item_id", item_id)),
+        )
+
+    def drop(
+        self,
+        agent_id: str,
+        tick: int,
+        item_id: str,
+        qty: int = 1,
+    ) -> dict[str, Any]:
+        """Queue dropping one or more units of an inventory item."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.DROP,
+            (("item_id", item_id), ("qty", qty)),
+        )
+
+    def eat(self, agent_id: str, tick: int, item_id: str) -> dict[str, Any]:
+        """Queue consuming one unit of food from the inventory."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.EAT,
+            (("item_id", item_id),),
+        )
+
+    def drink(
+        self,
+        agent_id: str,
+        tick: int,
+        *,
+        x: int | None = None,
+        y: int | None = None,
+        item_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Queue drinking from an adjacent source or from a waterskin."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.DRINK,
+            (("x", x), ("y", y), ("item_id", item_id)),
+        )
+
+    def fill(self, agent_id: str, tick: int, item_id: str) -> dict[str, Any]:
+        """Queue filling a waterskin from adjacent fresh water."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.FILL,
+            (("item_id", item_id),),
+        )
+
+    def craft(self, agent_id: str, tick: int, recipe_id: str) -> dict[str, Any]:
+        """Queue crafting one catalog recipe."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.CRAFT,
+            (("recipe_id", recipe_id),),
+        )
+
+    def use_item(self, agent_id: str, tick: int, item_id: str) -> dict[str, Any]:
+        """Queue using a consumable such as a bandage."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.USE_ITEM,
+            (("item_id", item_id),),
+        )
+
+    def build(
+        self,
+        agent_id: str,
+        tick: int,
+        structure_id: str,
+        x: int,
+        y: int,
+    ) -> dict[str, Any]:
+        """Queue construction of one structure on an adjacent tile."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.BUILD,
+            (("structure_id", structure_id), ("x", x), ("y", y)),
+        )
+
+    def attack(self, agent_id: str, tick: int, target_id: str) -> dict[str, Any]:
+        """Queue one adjacent melee attack against another agent."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.ATTACK,
+            (("target_id", target_id),),
+        )
+
+    def loot(self, agent_id: str, tick: int, corpse_id: str) -> dict[str, Any]:
+        """Queue looting an adjacent corpse."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.LOOT,
+            (("corpse_id", corpse_id),),
+        )
+
+    def flee(self, agent_id: str, tick: int, target_id: str) -> dict[str, Any]:
+        """Queue fleeing up to two cells away from a target."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.FLEE,
+            (("target_id", target_id),),
+        )
+
+    def _queue(
+        self,
+        agent_id: str,
+        tick: int,
+        kind: ActionKind,
+        payload: tuple[tuple[str, object], ...] = (),
+    ) -> dict[str, Any]:
         if AgentId(agent_id) not in self._names:
             return self._error("NOT_YOUR_TURN", "agent is not joined")
         try:
-            action = Action(AgentId(agent_id), tick, ActionKind.WAIT)
+            action = Action(AgentId(agent_id), tick, kind, payload)
         except ValueError as exc:
             return self._error("INVALID_TICK", str(exc), tick=tick)
         return self._submit(agent_id, action)
@@ -375,6 +986,7 @@ class GameSession:
         with self._lock:
             if self._phase is not SessionPhase.FINISHED:
                 self._phase = SessionPhase.FINISHED
+                self._waiting_reason = None
                 self._end_reason = reason
                 self._final_state_hash = canonical_state_hash(self._state)
                 self._condition.notify_all()
@@ -406,6 +1018,11 @@ class GameSession:
                 layout=layout,
                 profiles=self._profiles,
                 token_path=self._token_path,
+                catalog=self._catalog,
+                weather_min_ticks=self._weather_min_ticks,
+                weather_max_ticks=self._weather_max_ticks,
+                usage_pricing=self._usage_pricing,
+                mind_log_path=self._mind_log_path,
             )
 
     def health(self) -> dict[str, Any]:
@@ -486,10 +1103,19 @@ class GameSession:
     def _update_phase_locked(self) -> None:
         if self._phase is SessionPhase.FINISHED:
             return
-        has_active_agent = any(
-            agent.is_alive and agent.status is AgentStatus.ACTIVE for agent in self._state.agents
-        )
-        self._phase = SessionPhase.RUNNING if has_active_agent else SessionPhase.WAITING
+        living = [agent for agent in self._state.agents if agent.is_alive]
+        has_active_agent = any(agent.status is AgentStatus.ACTIVE for agent in living)
+        if has_active_agent:
+            self._phase = SessionPhase.RUNNING
+            self._waiting_reason = None
+            return
+        self._phase = SessionPhase.WAITING
+        if not self._joined_slots and not self._state.agents:
+            self._waiting_reason = SessionWaitReason.NO_AGENTS
+        elif not living:
+            self._waiting_reason = SessionWaitReason.LAST_DEATH
+        else:
+            self._waiting_reason = SessionWaitReason.NO_ACTIVE_AGENTS
 
     def _session_info_locked(self) -> dict[str, Any]:
         info: dict[str, Any] = {
@@ -498,6 +1124,8 @@ class GameSession:
             "joined_agents": len(self._joined_slots),
             "alive_agents": sum(1 for agent in self._state.agents if agent.is_alive),
         }
+        if self._waiting_reason is not None:
+            info["waiting_reason"] = self._waiting_reason.value
         if self._end_reason is not None:
             info["end_reason"] = self._end_reason.value
         return info
@@ -552,7 +1180,20 @@ class GameSession:
 
     def _record_result(self, result: TurnResult) -> None:
         for event in result.events:
-            success = event.outcome in {"moved", "waited"}
+            success = event.outcome in {
+                "moved",
+                "waited",
+                "gathered",
+                "picked_up",
+                "dropped",
+                "ate",
+                "drank",
+                "filled",
+                "crafted",
+                "built",
+                "rested",
+                "sleeping",
+            }
             self._last_results[event.agent_id] = {
                 "tick": result.tick,
                 "action": event.kind.value,
@@ -560,24 +1201,90 @@ class GameSession:
                 "outcome": event.outcome,
             }
 
+    def _resource_ids_at(self, state: SessionState, position: Position) -> tuple[str, ...]:
+        tile = state.world.tile_at(position)
+        if not state.resource_nodes:
+            return tuple(
+                resource.resource_id for resource in self._catalog.resources_for_tile(tile)
+            )
+        return available_resource_ids(state.resource_nodes, position, tile, self._catalog)
+
     def _observation(self, agent: Agent) -> dict[str, Any]:
         clock = self._engine.clock
         attributes = agent.attributes
         inventory = agent.inventory
-        visible = [
+        vision_radius = effective_vision(
+            agent,
+            clock,
+            self._state.weather,
+            self._state.structures,
+        )
+        visible_positions = compute_fov(
+            self._state.world,
+            agent.position,
+            vision_radius,
+        )
+        ground_items_by_position: dict[Position, list[GroundItem]] = {}
+        for ground in self._state.ground_items:
+            ground_items_by_position.setdefault(ground.position, []).append(ground)
+        structures_by_position = {
+            structure.position: structure for structure in self._state.structures
+        }
+        corpses_by_position: dict[Position, list[Corpse]] = {}
+        for corpse in self._state.corpses:
+            corpses_by_position.setdefault(corpse.position, []).append(corpse)
+        visible = []
+        for position in sorted(
+            visible_positions,
+            key=lambda item: (item.y, item.x),
+        ):
+            tile = self._state.world.tile_at(position)
+            resources = list(self._resource_ids_at(self._state, position))
+            entities: list[dict[str, Any]] = []
+            for ground in ground_items_by_position.get(position, ()):
+                entities.append(
+                    {
+                        "type": "item",
+                        "item_id": ground.stack.definition.item_id,
+                        "qty": ground.stack.quantity,
+                        "charges": ground.stack.charges,
+                    }
+                )
+            structure = structures_by_position.get(position)
+            if structure is not None:
+                entities.append({"type": "structure", "kind": structure.kind.value})
+            for corpse in corpses_by_position.get(position, ()):
+                entities.append(corpse.as_observation())
+            visible.append(
+                {
+                    "x": position.x,
+                    "y": position.y,
+                    "tile": tile.value,
+                    "glyph": tile.glyph,
+                    "resource": resources[0] if resources else None,
+                    "resources": resources,
+                    "entities": entities,
+                }
+            )
+        visible_agents = [
             {
-                "x": x,
-                "y": y,
-                "tile": self._state.world.tile_at(Position(x, y)).value,
+                "id": other.agent_id,
+                "name": self._names[other.agent_id],
+                "pos": [other.position.x, other.position.y],
+                "health_band": _health_band(other.attributes.health),
+                "equipment_visible": [
+                    spec.item_id
+                    for _, spec in sorted(
+                        other.equipment.items,
+                        key=lambda item: item[0].value,
+                    )
+                ],
+                "relation": "neutral",
             }
-            for y in range(
-                max(0, agent.position.y - PERCEPTION_RADIUS),
-                min(self._state.world.height, agent.position.y + PERCEPTION_RADIUS + 1),
-            )
-            for x in range(
-                max(0, agent.position.x - PERCEPTION_RADIUS),
-                min(self._state.world.width, agent.position.x + PERCEPTION_RADIUS + 1),
-            )
+            for other in sorted(self._state.agents, key=lambda item: item.agent_id)
+            if other.agent_id != agent.agent_id
+            and other.is_alive
+            and other.position in visible_positions
         ]
         observation: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
@@ -602,26 +1309,64 @@ class GameSession:
                 "energy": attributes.energy,
                 "body_temp_c": attributes.body_temperature_c,
                 "wetness": attributes.wetness,
-                "status": [],
-                "strength": attributes.strength,
-                "dexterity": attributes.dexterity,
+                "status": [tag.value for tag in status_tags(agent)],
+                "sleeping": agent.status is AgentStatus.SLEEPING,
+                "strength": max(0, attributes.strength - strength_penalty(attributes)),
+                "dexterity": max(
+                    0,
+                    attributes.dexterity - dexterity_penalty(attributes),
+                ),
                 "endurance": attributes.endurance,
-                "effective_vision": agent.effective_vision,
+                "effective_vision": vision_radius,
                 "carry_kg": inventory.total_weight_grams / 1000.0,
                 "carry_capacity_kg": agent.carry_capacity_grams / 1000.0,
                 "equipment": {slot.value: spec.item_id for slot, spec in agent.equipment.items},
             },
             "environment": {
-                "weather": "clear",
-                "temperature_c": 22.0,
-                "wind": 0,
-                "visibility_factor": 1.0,
+                "weather": self._state.weather.kind.value,
+                "temperature_c": self._state.weather.temperature_c,
+                "wind": self._state.weather.wind,
+                "visibility_factor": self._state.weather.visibility_factor,
             },
             "perception": {
                 "visible": visible,
-                "memory_updates": [],
-                "agents": [],
-                "messages": [],
+                "memory_updates": [
+                    {
+                        "x": entry.position.x,
+                        "y": entry.position.y,
+                        "tile": entry.tile.value,
+                        "last_seen_tick": entry.last_seen_tick,
+                        "resources": list(entry.resources),
+                        "structure": (
+                            entry.structure.value if entry.structure is not None else None
+                        ),
+                        "stale": entry.stale,
+                    }
+                    for entry in agent.memory.tiles
+                ],
+                "memory_agents": [
+                    {
+                        "id": entry.agent_id,
+                        "x": entry.position.x,
+                        "y": entry.position.y,
+                        "last_seen_tick": entry.last_seen_tick,
+                        "stale": entry.stale,
+                    }
+                    for entry in agent.memory.agents
+                ],
+                "agents": visible_agents,
+                "messages": [
+                    message.as_observation()
+                    for message in sorted(
+                        (
+                            current
+                            for current in self._delivered_chat
+                            if current.deliver_tick == self._state.tick
+                            and agent.agent_id in current.recipients
+                        ),
+                        key=lambda current: (current.sent_tick, str(current.sender_id)),
+                    )
+                ],
             },
             "inventory": {
                 "weight_kg": inventory.total_weight_grams / 1000.0,
@@ -631,6 +1376,7 @@ class GameSession:
                     {
                         "item_id": stack.definition.item_id,
                         "qty": stack.quantity,
+                        "charges": stack.charges,
                         "weight_kg": stack.total_weight_grams / 1000.0,
                     }
                     for stack in inventory.stacks
@@ -638,7 +1384,22 @@ class GameSession:
             },
             "available_actions": [
                 {"action": "move", "available": True},
+                {"action": "move_to", "available": True},
                 {"action": "wait", "available": True},
+                {"action": "gather", "available": True},
+                {"action": "pickup", "available": True},
+                {"action": "drop", "available": True},
+                {"action": "eat", "available": True},
+                {"action": "drink", "available": True},
+                {"action": "fill", "available": True},
+                {"action": "craft", "available": True},
+                {"action": "build", "available": True},
+                {"action": "use", "available": True},
+                {"action": "attack", "available": True},
+                {"action": "flee", "available": True},
+                {"action": "loot", "available": True},
+                {"action": "rest", "available": True},
+                {"action": "sleep", "available": True},
             ],
         }
         last_result = self._last_results.get(agent.agent_id)
@@ -658,7 +1419,113 @@ class GameSession:
         state: SessionState,
         resolved_actions: tuple[ResolvedAction, ...],
     ) -> SessionState:
-        return apply_needs_tick(state, resolved_actions)
+        weather, rng_state = advance_weather(
+            state.weather,
+            state.rng_state,
+            min_ticks=self._weather_min_ticks,
+            max_ticks=self._weather_max_ticks,
+        )
+        state = replace(state, weather=weather, rng_state=rng_state)
+        state = apply_weather_wetness(state)
+        state = advance_fires(state)
+        state = apply_climate_tick(state, self._engine.clock)
+        state = apply_needs_tick(
+            state,
+            resolved_actions,
+            ambient_temperature_centi=weather.ambient_temperature_centi,
+        )
+        state = apply_sleep_tick(state)
+        state = apply_status_tick(state)
+        state = self._finalize_deaths_locked(state)
+        state = replace(
+            state,
+            resource_nodes=advance_resource_nodes(
+                state.resource_nodes,
+                tick=state.tick + 1,
+            ),
+        )
+        self._advance_chat_locked(state.tick + 1)
+        return self._update_memory_locked(state)
+
+    def _finalize_deaths_locked(self, state: SessionState) -> SessionState:
+        known = {corpse.agent_id for corpse in state.corpses}
+        corpses = list(state.corpses)
+        agents: list[Agent] = []
+        for agent in state.agents:
+            if agent.is_alive or agent.agent_id in known:
+                agents.append(agent)
+                continue
+            corpses.append(
+                Corpse.from_agent(
+                    agent,
+                    tick=state.tick,
+                    cause="environment",
+                )
+            )
+            agents.append(
+                replace(
+                    agent,
+                    inventory=Inventory.for_strength(agent.attributes.strength),
+                    equipment=Equipment(),
+                )
+            )
+            known.add(agent.agent_id)
+        return replace(state, agents=tuple(agents), corpses=tuple(corpses))
+
+    def _advance_chat_locked(self, tick: int) -> None:
+        ready = [message for message in self._pending_chat if message.deliver_tick <= tick]
+        self._pending_chat = [
+            message for message in self._pending_chat if message.deliver_tick > tick
+        ]
+        self._delivered_chat = ready
+
+    def _update_memory_locked(self, state: SessionState) -> SessionState:
+        clock = self._engine.clock
+        agents: list[Agent] = []
+        for agent in state.agents:
+            if not agent.is_alive:
+                agents.append(agent)
+                continue
+            radius = effective_vision(
+                agent,
+                clock,
+                state.weather,
+                state.structures,
+            )
+            visible = compute_fov(state.world, agent.position, radius)
+            visible_tiles = tuple(
+                MemoryEntry(
+                    position=position,
+                    tile=state.world.tile_at(position),
+                    last_seen_tick=state.tick,
+                    resources=self._resource_ids_at(state, position),
+                    structure=next(
+                        (
+                            structure.kind
+                            for structure in state.structures
+                            if structure.position == position
+                        ),
+                        None,
+                    ),
+                )
+                for position in sorted(visible, key=lambda item: (item.y, item.x))
+            )
+            visible_agents = tuple(
+                AgentMemory(
+                    agent_id=other.agent_id,
+                    position=other.position,
+                    last_seen_tick=state.tick,
+                )
+                for other in state.agents
+                if other.agent_id != agent.agent_id and other.is_alive and other.position in visible
+            )
+            agents.append(
+                replace(
+                    agent,
+                    memory=agent.memory.refresh(visible_tiles, visible_agents),
+                )
+            )
+        return replace(state, agents=tuple(agents))
 
     def _write_tokens(self, path: Path) -> None:
         data = {

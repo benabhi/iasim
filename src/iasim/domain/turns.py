@@ -13,6 +13,7 @@ from iasim.domain.hashing import canonical_state_hash
 from iasim.domain.identifiers import AgentId
 from iasim.domain.rng import roll_d6
 from iasim.domain.session import SessionState
+from iasim.domain.status import dexterity_penalty
 
 
 class TurnError(Exception):
@@ -85,7 +86,11 @@ def initiative(agent: Agent, seed: int, tick: int, weapon_speed: int = 0) -> int
 
     Weapon speed is zero until equipment is modelled.
     """
-    return agent.attributes.dexterity + weapon_speed + roll_d6(seed, tick, agent.agent_id)
+    effective_dexterity = max(
+        0,
+        agent.attributes.dexterity - dexterity_penalty(agent.attributes),
+    )
+    return effective_dexterity + weapon_speed + roll_d6(seed, tick, agent.agent_id)
 
 
 class TurnEngine:

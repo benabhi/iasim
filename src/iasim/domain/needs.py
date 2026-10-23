@@ -12,13 +12,23 @@ from iasim.domain.turns import ResolvedAction
 _CENTI = 100
 _ACTIVITY_FACTORS: dict[ActionKind, int] = {
     ActionKind.MOVE: 1000,
+    ActionKind.MOVE_TO: 1000,
     ActionKind.GATHER: 1200,
+    ActionKind.PICKUP: 1000,
+    ActionKind.DROP: 1000,
+    ActionKind.EAT: 500,
+    ActionKind.DRINK: 500,
+    ActionKind.FILL: 1000,
     ActionKind.CRAFT: 1200,
     ActionKind.BUILD: 1200,
     ActionKind.USE_ITEM: 1200,
+    ActionKind.LOOT: 1000,
     ActionKind.TRADE: 1200,
     ActionKind.ATTACK: 1500,
+    ActionKind.FLEE: 1500,
     ActionKind.WAIT: 500,
+    ActionKind.REST: 500,
+    ActionKind.SLEEP: 300,
 }
 _REST_ACTIVITY = 500
 _SLEEP_ACTIVITY = 300

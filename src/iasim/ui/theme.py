@@ -19,25 +19,7 @@ BAR_BG: RGB = (30, 34, 42)
 BAR_FG: RGB = (235, 238, 242)
 AGENT_COLOR: RGB = (255, 230, 120)
 
-TILE_GLYPHS: dict[TileType, str] = {
-    TileType.DEEP_WATER: "≈",
-    TileType.SHALLOW_WATER: "~",
-    TileType.FRESH_WATER: "~",
-    TileType.SAND: "·",
-    TileType.GRASS: ",",
-    TileType.TALL_GRASS: '"',
-    TileType.TREE: "♣",
-    TileType.PALM: "♣",
-    TileType.BUSH: "♠",
-    TileType.ROCK: "▲",
-    TileType.ROCKY_GROUND: "▒",
-    TileType.CLAY: "▓",
-    TileType.WORKBENCH: "≡",
-    TileType.SHELTER: "∩",
-    TileType.FIRE: "*",
-    TileType.CORPSE: "☠",
-    TileType.GROUND_ITEM: "!",
-}
+TILE_GLYPHS: dict[TileType, str] = {tile: tile.glyph for tile in TileType}
 
 ASCII_TILE_GLYPHS: dict[TileType, str] = {
     TileType.DEEP_WATER: "~",

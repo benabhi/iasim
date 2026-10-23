@@ -64,6 +64,12 @@ class UiControlTests(unittest.TestCase):
         state = handle_key(state, "a", AGENTS)
         self.assertFalse(state.ascii_mode)
 
+    def test_v_toggles_focus_mode(self) -> None:
+        state = handle_key(UiState(), "v", AGENTS)
+        self.assertTrue(state.focus_mode)
+        state = handle_key(state, "v", AGENTS)
+        self.assertFalse(state.focus_mode)
+
     def test_quit_and_restart_require_confirmation(self) -> None:
         quit_pending = handle_key(UiState(), "q", AGENTS)
         self.assertEqual(quit_pending.pending_confirmation, UiCommand.QUIT)

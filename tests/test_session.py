@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 
 from iasim.app.session import GameSession, SessionPhase
+from iasim.crafting import load_catalog
 from iasim.domain.agents import AgentAttributes, AgentProfile
 from iasim.domain.geometry import Position
 from iasim.domain.identifiers import ItemId
@@ -80,6 +81,28 @@ class GameSessionTests(unittest.TestCase):
         self.assertNotIn("rng_state", observation)
         self.assertNotIn("tiles", observation)
         self.assertLessEqual(len(observation["perception"]["visible"]), 49)
+        self.assertEqual(
+            {action["action"] for action in observation["available_actions"]},
+            {
+                "move",
+                "move_to",
+                "wait",
+                "gather",
+                "pickup",
+                "drop",
+                "eat",
+                "drink",
+                "fill",
+                "craft",
+                "build",
+                "use",
+                "attack",
+                "flee",
+                "loot",
+                "rest",
+                "sleep",
+            },
+        )
 
     def test_move_advances_tick_and_updates_position(self) -> None:
         session = _session()
@@ -112,6 +135,105 @@ class GameSessionTests(unittest.TestCase):
         self.assertEqual(observation["agent"]["pos"], [3, 2])
         self.assertEqual(observation["last_action_result"]["action"], "wait")
         self.assertEqual(observation["last_action_result"]["outcome"], "waited")
+
+    def test_gather_updates_inventory_and_reports_the_action(self) -> None:
+        tiles = [TileType.GRASS] * 25
+        tiles[2 * 5 + 3] = TileType.BUSH
+        layout = WorldLayout(
+            seed=42,
+            world=WorldMap(width=5, height=5, tiles=tuple(tiles)),
+            spawn_points=(Position(2, 2),),
+        )
+        session = _session(layout)
+        agent_id = _join(session, "Nia")["agent_id"]
+
+        result = session.gather(agent_id, 0, 3, 2)
+        observation = session.observe(agent_id)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(observation["tick"], 1)
+        self.assertEqual(observation["last_action_result"]["action"], "gather")
+        self.assertEqual(observation["last_action_result"]["outcome"], "gathered")
+        self.assertEqual(
+            observation["inventory"]["items"][0]["item_id"],
+            "berry",
+        )
+        self.assertEqual(observation["inventory"]["items"][0]["qty"], 2)
+
+    def test_eat_updates_needs_and_inventory_in_the_session(self) -> None:
+        catalog = load_catalog()
+        inventory = Inventory.for_strength(5).add(ItemStack(catalog.item("berry").definition, 1))
+        session = _session(profiles=(AgentProfile(inventory=inventory),))
+        agent_id = _join(session, "Nia")["agent_id"]
+
+        result = session.eat(agent_id, 0, "berry")
+        observation = session.observe(agent_id)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(observation["last_action_result"]["action"], "eat")
+        self.assertEqual(observation["last_action_result"]["status"], "success")
+        self.assertEqual(observation["inventory"]["items"], [])
+        self.assertLess(observation["agent"]["hunger"], 1.0)
+
+    def test_craft_updates_inventory_and_reports_the_action(self) -> None:
+        catalog = load_catalog()
+        inventory = Inventory.for_strength(5).add_quantity(
+            catalog.item("stone").definition,
+            2,
+        )
+        session = _session(profiles=(AgentProfile(inventory=inventory),))
+        agent_id = _join(session, "Nia")["agent_id"]
+
+        result = session.craft(agent_id, 0, "sharp_stone")
+        observation = session.observe(agent_id)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(observation["last_action_result"]["action"], "craft")
+        self.assertEqual(observation["last_action_result"]["status"], "success")
+        self.assertIsNone(
+            next(
+                (item for item in observation["inventory"]["items"] if item["item_id"] == "stone"),
+                None,
+            )
+        )
+        self.assertEqual(
+            next(
+                item
+                for item in observation["inventory"]["items"]
+                if item["item_id"] == "sharp_stone"
+            )["qty"],
+            1,
+        )
+
+    def test_build_places_a_structure_and_reports_the_action(self) -> None:
+        catalog = load_catalog()
+        inventory = Inventory.for_strength(5).add(ItemStack(catalog.item("camp_kit").definition, 1))
+        session = _session(profiles=(AgentProfile(inventory=inventory),))
+        agent_id = _join(session, "Nia")["agent_id"]
+
+        result = session.build(agent_id, 0, "fire", 3, 2)
+        observation = session.observe(agent_id)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(observation["last_action_result"]["action"], "build")
+        self.assertEqual(observation["last_action_result"]["status"], "success")
+        self.assertEqual(session.state.structures[0].kind.value, "fire")
+        self.assertEqual(session.state.structures[0].fuel, 99)
+
+    def test_move_to_advances_one_step_per_tick(self) -> None:
+        session = _session()
+        agent_id = _join(session, "Nia")["agent_id"]
+
+        first = session.move_to(agent_id, 0, 4, 2)
+        first_observation = session.observe(agent_id)
+        second = session.move_to(agent_id, 1, 4, 2)
+        second_observation = session.observe(agent_id)
+
+        self.assertTrue(first["ok"])
+        self.assertEqual(first_observation["last_action_result"]["action"], "move_to")
+        self.assertNotEqual(first_observation["agent"]["pos"], [2, 2])
+        self.assertTrue(second["ok"])
+        self.assertEqual(second_observation["agent"]["pos"], [4, 2])
 
     def test_blocked_move_is_reported_in_the_next_observation(self) -> None:
         session = _session(_layout(blocked=Position(3, 2)))

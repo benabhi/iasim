@@ -28,7 +28,25 @@ TOOL_NAMES = {
     "iasim_join",
     "iasim_observe",
     "iasim_move",
+    "iasim_move_to",
     "iasim_wait",
+    "iasim_rest",
+    "iasim_sleep",
+    "iasim_gather",
+    "iasim_pickup",
+    "iasim_drop",
+    "iasim_eat",
+    "iasim_drink",
+    "iasim_fill",
+    "iasim_use",
+    "iasim_craft",
+    "iasim_build",
+    "iasim_attack",
+    "iasim_flee",
+    "iasim_loot",
+    "iasim_say",
+    "iasim_report_mind",
+    "iasim_report_usage",
     "iasim_wait_for_tick",
 }
 
@@ -53,7 +71,13 @@ def _data(result: Any) -> dict[str, Any]:
 
 
 def _start_server(app: Any) -> tuple[uvicorn.Server, threading.Thread, int]:
-    config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning")
+    config = uvicorn.Config(
+        app,
+        host="127.0.0.1",
+        port=0,
+        log_level="warning",
+        timeout_graceful_shutdown=1,
+    )
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
@@ -129,6 +153,81 @@ class McpServerTests(unittest.TestCase):
                         self.assertTrue(joined["ok"])
                         self.assertEqual(joined["spawn"], [2, 2])
 
+                        said = _data(
+                            await client.call_tool(
+                                "iasim_say",
+                                {"message": "Hola desde el test"},
+                            )
+                        )
+                        self.assertTrue(said["ok"])
+                        duplicate_say = _data(
+                            await client.call_tool(
+                                "iasim_say",
+                                {"message": "Segundo mensaje"},
+                            )
+                        )
+                        self.assertEqual(duplicate_say["error"]["code"], "ALREADY_SAID")
+
+                        mind = _data(
+                            await client.call_tool(
+                                "iasim_report_mind",
+                                {
+                                    "tick": 0,
+                                    "intent": "Explorar",
+                                    "thought": "Veo el borde del mapa.",
+                                    "plan": "Caminar al este",
+                                    "confidence": 60,
+                                },
+                            )
+                        )
+                        self.assertTrue(mind["ok"])
+                        duplicate_mind = _data(
+                            await client.call_tool(
+                                "iasim_report_mind",
+                                {
+                                    "tick": 0,
+                                    "intent": "Otra vez",
+                                    "thought": "Duplicado",
+                                },
+                            )
+                        )
+                        self.assertEqual(
+                            duplicate_mind["error"]["code"],
+                            "ALREADY_REPORTED",
+                        )
+
+                        reported = _data(
+                            await client.call_tool(
+                                "iasim_report_usage",
+                                {
+                                    "tick": 0,
+                                    "input_tokens": 120,
+                                    "output_tokens": 30,
+                                    "model": "gpt-5",
+                                    "reasoning_effort": "high",
+                                    "cost_usd": 0.01,
+                                },
+                            )
+                        )
+                        self.assertTrue(reported["ok"])
+                        self.assertEqual(reported["usage"]["total_tokens"], 150)
+                        self.assertEqual(reported["usage"]["cost_source"], "reported")
+                        self.assertAlmostEqual(reported["usage"]["cost_usd"], 0.01)
+
+                        invalid_usage = _data(
+                            await client.call_tool(
+                                "iasim_report_usage",
+                                {
+                                    "tick": 0,
+                                    "input_tokens": -1,
+                                    "output_tokens": 0,
+                                    "model": "gpt-5",
+                                },
+                            )
+                        )
+                        self.assertFalse(invalid_usage["ok"])
+                        self.assertEqual(invalid_usage["error"]["code"], "INVALID_USAGE")
+
                         observation = _data(await client.call_tool("iasim_observe", {}))
                         self.assertEqual(observation["tick"], 0)
                         self.assertEqual(observation["agent"]["pos"], [2, 2])
@@ -182,6 +281,52 @@ class McpServerTests(unittest.TestCase):
                         self.assertFalse(timed_out["ok"])
                         self.assertEqual(timed_out["error"]["code"], "NO_NEW_TICK")
 
+                        eaten = _data(
+                            await client.call_tool(
+                                "iasim_eat",
+                                {"tick": 2, "item_id": "berry"},
+                            )
+                        )
+                        self.assertTrue(eaten["ok"])
+                        observation = _data(await client.call_tool("iasim_observe", {}))
+                        self.assertEqual(observation["tick"], 3)
+                        self.assertEqual(observation["last_action_result"]["action"], "eat")
+                        self.assertEqual(observation["last_action_result"]["status"], "rejected")
+                        self.assertEqual(
+                            observation["last_action_result"]["outcome"],
+                            "missing_item",
+                        )
+
+                        drunk = _data(
+                            await client.call_tool(
+                                "iasim_drink",
+                                {"tick": 3, "x": 2, "y": 2},
+                            )
+                        )
+                        self.assertTrue(drunk["ok"])
+                        observation = _data(await client.call_tool("iasim_observe", {}))
+                        self.assertEqual(observation["tick"], 4)
+                        self.assertEqual(observation["last_action_result"]["action"], "drink")
+                        self.assertEqual(
+                            observation["last_action_result"]["outcome"],
+                            "not_drinkable",
+                        )
+
+                        crafted = _data(
+                            await client.call_tool(
+                                "iasim_craft",
+                                {"tick": 4, "recipe_id": "sharp_stone"},
+                            )
+                        )
+                        self.assertTrue(crafted["ok"])
+                        observation = _data(await client.call_tool("iasim_observe", {}))
+                        self.assertEqual(observation["tick"], 5)
+                        self.assertEqual(observation["last_action_result"]["action"], "craft")
+                        self.assertEqual(
+                            observation["last_action_result"]["outcome"],
+                            "missing_ingredients",
+                        )
+
                 asyncio.run(flow())
             finally:
                 server.should_exit = True
@@ -190,6 +335,44 @@ class McpServerTests(unittest.TestCase):
 
             self.assertFalse(thread.is_alive())
             self.assertEqual(session.state.agents[0].position, Position(3, 2))
+
+    def test_http_message_limit_returns_structured_error(self) -> None:
+        session = GameSession(42, layout=_layout())
+        token = session.tokens[0]
+        _, app = create_app(session)
+        server, thread, port = _start_server(app)
+        try:
+
+            async def flow() -> None:
+                headers = {"Authorization": f"Bearer {token}"}
+                async with (
+                    create_mcp_http_client(headers=headers) as http_client,
+                    streamable_http_client(
+                        f"http://127.0.0.1:{port}/mcp",
+                        http_client=http_client,
+                    ) as (read_stream, write_stream),
+                    ClientSession(read_stream, write_stream) as client,
+                ):
+                    await client.initialize()
+                    joined = _data(await client.call_tool("iasim_join", {"name": "Nia"}))
+                    self.assertTrue(joined["ok"])
+
+                    too_long = _data(
+                        await client.call_tool(
+                            "iasim_sleep",
+                            {"tick": 0, "until": "x" * 281},
+                        )
+                    )
+                    self.assertFalse(too_long["ok"])
+                    self.assertEqual(too_long["error"]["code"], "MESSAGE_TOO_LONG")
+
+            asyncio.run(flow())
+        finally:
+            server.should_exit = True
+            server.force_exit = True
+            thread.join(timeout=10)
+
+        self.assertFalse(thread.is_alive())
 
     def test_loopback_connection_info_has_no_warning(self) -> None:
         info = server_connection_info("127.0.0.1", 8765)

@@ -16,6 +16,7 @@ from iasim.domain.items import (
     ItemSpec,
     ItemStack,
 )
+from iasim.domain.memory import Memory
 
 _CENTI = 100
 
@@ -113,11 +114,25 @@ class Agent:
     inventory: Inventory = field(default_factory=_default_inventory)
     equipment: Equipment = field(default_factory=Equipment)
     status: AgentStatus = AgentStatus.ACTIVE
+    sleep_until_tick: int | None = None
+    memory: Memory = field(default_factory=Memory)
+    bleeding: bool = False
 
     def __post_init__(self) -> None:
         validate_agent_id(self.agent_id)
         if not isinstance(self.status, AgentStatus):
             raise ValueError(f"status must be an AgentStatus, got {self.status!r}")
+        if not isinstance(self.memory, Memory):
+            raise ValueError(f"memory must be a Memory, got {self.memory!r}")
+        if not isinstance(self.bleeding, bool):
+            raise ValueError(f"bleeding must be a boolean, got {self.bleeding!r}")
+        if self.sleep_until_tick is not None and (
+            type(self.sleep_until_tick) is not int or self.sleep_until_tick < 0
+        ):
+            raise ValueError(
+                "sleep_until_tick must be a non-negative integer or None, "
+                f"got {self.sleep_until_tick!r}"
+            )
         if not isinstance(self.equipment, Equipment):
             raise ValueError(f"equipment must be an Equipment, got {self.equipment!r}")
         required_slots = BASE_SLOTS + self.equipment.bonus_slots

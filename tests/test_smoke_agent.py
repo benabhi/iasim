@@ -55,17 +55,29 @@ class SmokeAgentTests(unittest.TestCase):
             self.assertEqual(session.state.agents[0].position, positions[-1])
 
             agent_id = session.state.agents[0].agent_id
+            session.report_usage(
+                agent_id,
+                session.tick,
+                input_tokens=100,
+                output_tokens=25,
+                model="smoke-model",
+                reasoning_effort="low",
+                cost_usd=0.001,
+            )
             names = {AgentId(agent_id): "Smoke"}
             screen = render_base_screen(
                 session.state,
                 names,
                 selected_agent_id=AgentId(agent_id),
+                usage=session.usage_snapshot(),
             )
             last = positions[-1]
             self.assertEqual(screen.cell_at(last.x, last.y).char, "@")
             panel = "\n".join(screen.row_text(y)[80:] for y in range(45))
             self.assertIn("Smoke", panel)
             self.assertIn(f"({last.x}, {last.y})", panel)
+            self.assertIn("USO IA (REPORTADO)", panel)
+            self.assertIn("smoke-model / low", panel)
 
 
 if __name__ == "__main__":

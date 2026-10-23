@@ -12,13 +12,23 @@ class ActionKind(StrEnum):
     """Primary action categories in SRS section 3.2 resolution order."""
 
     MOVE = "move"
+    MOVE_TO = "move_to"
     GATHER = "gather"
+    PICKUP = "pickup"
+    DROP = "drop"
+    EAT = "eat"
+    DRINK = "drink"
+    FILL = "fill"
     CRAFT = "craft"
     BUILD = "build"
     USE_ITEM = "use_item"
     TRADE = "trade"
+    LOOT = "loot"
     ATTACK = "attack"
+    FLEE = "flee"
     WAIT = "wait"
+    REST = "rest"
+    SLEEP = "sleep"
 
     @property
     def order(self) -> int:
@@ -26,7 +36,29 @@ class ActionKind(StrEnum):
         return _ACTION_ORDER[self]
 
 
-_ACTION_ORDER: dict[ActionKind, int] = {kind: index for index, kind in enumerate(ActionKind)}
+# SRS section 3.2: movement, gathering, crafting, building, item use, trade, combat.
+# Item interaction actions share the item-use rank so enumeration order cannot change
+# the deterministic resolution order.
+_ACTION_ORDER: dict[ActionKind, int] = {
+    ActionKind.MOVE: 0,
+    ActionKind.MOVE_TO: 0,
+    ActionKind.GATHER: 1,
+    ActionKind.CRAFT: 2,
+    ActionKind.BUILD: 3,
+    ActionKind.PICKUP: 4,
+    ActionKind.DROP: 4,
+    ActionKind.EAT: 4,
+    ActionKind.DRINK: 4,
+    ActionKind.FILL: 4,
+    ActionKind.USE_ITEM: 4,
+    ActionKind.LOOT: 4,
+    ActionKind.TRADE: 5,
+    ActionKind.ATTACK: 6,
+    ActionKind.FLEE: 6,
+    ActionKind.WAIT: 7,
+    ActionKind.REST: 7,
+    ActionKind.SLEEP: 7,
+}
 
 
 @dataclass(frozen=True, slots=True)

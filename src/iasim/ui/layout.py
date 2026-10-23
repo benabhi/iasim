@@ -7,14 +7,19 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from iasim.domain.agents import Agent, AgentStatus
+from iasim.domain.climate import effective_vision
 from iasim.domain.clock import DayPhase, SimulationClock
 from iasim.domain.geometry import Position
 from iasim.domain.identifiers import AgentId
+from iasim.domain.mind import MindReport
 from iasim.domain.session import SessionState
+from iasim.domain.status import Condition, status_tags
 from iasim.domain.tiles import TileType
+from iasim.domain.usage import AgentUsage, CostSource
 from iasim.domain.world import StructureKind
 from iasim.ui import theme
 from iasim.ui.controls import KEY_GUIDE, STATUS_GUIDE
+from iasim.world.tcod_fov import compute_fov
 
 SCREEN_WIDTH = 160
 SCREEN_HEIGHT = 45
@@ -39,6 +44,26 @@ _PHASE_LABELS: dict[DayPhase, str] = {
     DayPhase.DAY: "DÍA",
     DayPhase.DUSK: "ATARDECER",
     DayPhase.NIGHT: "NOCHE",
+}
+
+_STATUS_LABELS: dict[Condition, str] = {
+    Condition.HUNGRY: "HAMBRE",
+    Condition.STARVING: "INANICIÓN",
+    Condition.THIRSTY: "SED",
+    Condition.DEHYDRATED: "DESHIDRATADO",
+    Condition.EXHAUSTED: "AGOTADO",
+    Condition.HYPOTHERMIA: "HIPOTERMIA",
+    Condition.HEAT_STROKE: "GOLPE DE CALOR",
+    Condition.WET: "MOJADO",
+    Condition.BLEEDING: "SANGRANDO",
+    Condition.DEAD: "MUERTO",
+}
+
+_COST_SOURCE_LABELS: dict[CostSource, str] = {
+    CostSource.REPORTED: "reportado",
+    CostSource.ESTIMATED: "estimado",
+    CostSource.MIXED: "mixto",
+    CostSource.UNKNOWN: "desconocido",
 }
 
 
@@ -171,11 +196,15 @@ def render_base_screen(
     speed: int = 1,
     capacity: int = 8,
     ascii_mode: bool = False,
+    focus_mode: bool = False,
+    usage: Mapping[AgentId, AgentUsage] | None = None,
+    mind_reports: Mapping[AgentId, MindReport] | None = None,
+    waiting_reason: str | None = None,
 ) -> BaseScreen:
     """Render the deterministic base screen without mutating the session."""
     canvas = _Canvas()
     canvas.fill(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, fg=theme.WHITE, bg=theme.BLACK)
-    _render_map(canvas, state, selected_agent_id, ascii_mode)
+    _render_map(canvas, state, selected_agent_id, ascii_mode, focus_mode=focus_mode)
     _render_ticker(canvas, events, ascii_mode)
     _render_panel(
         canvas,
@@ -187,6 +216,9 @@ def render_base_screen(
         speed=speed,
         capacity=capacity,
         ascii_mode=ascii_mode,
+        usage=usage,
+        mind_reports=mind_reports,
+        waiting_reason=waiting_reason,
     )
     _render_bottom_bar(canvas, ascii_mode)
     return canvas.to_screen()
@@ -269,12 +301,31 @@ def _render_map(
     state: SessionState,
     selected_agent_id: AgentId | None,
     ascii_mode: bool,
+    *,
+    focus_mode: bool = False,
 ) -> None:
+    selected = _resolve_selected(state, selected_agent_id)
+    visible_positions: frozenset[Position] | None = None
+    if focus_mode and selected is not None:
+        clock = SimulationClock(state.tick_minutes)
+        clock.advance(state.tick)
+        radius = effective_vision(
+            selected,
+            clock,
+            state.weather,
+            state.structures,
+        )
+        visible_positions = compute_fov(state.world, selected.position, radius)
+
     for y in range(MAP_HEIGHT):
         for x in range(MAP_WIDTH):
             if x >= state.world.width or y >= state.world.height:
                 continue
-            tile = state.world.tile_at(Position(x, y))
+            position = Position(x, y)
+            if visible_positions is not None and position not in visible_positions:
+                canvas.put(x, y, " ", fg=theme.BLACK, bg=theme.BLACK)
+                continue
+            tile = state.world.tile_at(position)
             canvas.put(
                 x,
                 y,
@@ -286,15 +337,17 @@ def _render_map(
     for agent in state.agents:
         if not (0 <= agent.position.x < MAP_WIDTH and 0 <= agent.position.y < MAP_HEIGHT):
             continue
-        selected = agent.agent_id == selected_agent_id
+        if visible_positions is not None and agent.position not in visible_positions:
+            continue
+        is_selected = agent.agent_id == selected_agent_id
         tile = state.world.tile_at(agent.position)
         canvas.put(
             agent.position.x,
             agent.position.y,
             _agent_glyph(agent, ascii_mode),
             fg=theme.AGENT_COLOR,
-            bg=theme.SELECTED_BG if selected else theme.TILE_BACKGROUNDS[tile],
-            bold=selected,
+            bg=theme.SELECTED_BG if is_selected else theme.TILE_BACKGROUNDS[tile],
+            bold=is_selected,
         )
 
 
@@ -323,6 +376,9 @@ def _render_panel(
     speed: int,
     capacity: int,
     ascii_mode: bool,
+    usage: Mapping[AgentId, AgentUsage] | None,
+    mind_reports: Mapping[AgentId, MindReport] | None,
+    waiting_reason: str | None,
 ) -> None:
     canvas.fill(
         PANEL_X,
@@ -340,6 +396,11 @@ def _render_panel(
     clock = SimulationClock(state.tick_minutes)
     clock.advance(state.tick)
     phase = _PHASE_LABELS[clock.phase]
+    status_label = "PAUSA" if paused else "EN CURSO"
+    if waiting_reason is not None:
+        status_label = "ESPERANDO AGENTES"
+        if waiting_reason == "last_death":
+            status_label += " · ÚLTIMA MUERTE"
     _panel(
         canvas,
         0,
@@ -351,8 +412,7 @@ def _render_panel(
     _panel(
         canvas,
         1,
-        f"{'PAUSA' if paused else 'EN CURSO'} · VEL {speed}x · "
-        f"AGENTES {len(state.agents)}/{capacity}",
+        f"{status_label} · VEL {speed}x · AGENTES {len(state.agents)}/{capacity}",
         fg=theme.CYAN,
     )
     _panel(canvas, 2, separator, fg=theme.DIM)
@@ -459,8 +519,52 @@ def _render_panel(
     y += 1
     _panel(canvas, y, "MENTE (REPORTADO)", fg=theme.CYAN, bold=True)
     y += 1
-    _panel(canvas, y, "— sin reporte —", fg=theme.DIM)
-    y += 2
+    selected_mind = mind_reports.get(selected.agent_id) if mind_reports is not None else None
+    if selected_mind is None:
+        _panel(canvas, y, "— sin reporte —", fg=theme.DIM)
+        y += 1
+    else:
+        _panel(canvas, y, f"Intención: {selected_mind.intent}")
+        y += 1
+        _panel(canvas, y, f"Pensamiento: {selected_mind.thought}")
+        y += 1
+        if selected_mind.plan is not None:
+            _panel(canvas, y, f"Plan: {selected_mind.plan}")
+            y += 1
+        if selected_mind.confidence is not None:
+            _panel(canvas, y, f"Confianza: {selected_mind.confidence}")
+            y += 1
+
+    selected_usage = usage.get(selected.agent_id) if usage is not None else None
+    if selected_usage is not None and selected_usage.entries:
+        _panel(canvas, y, separator, fg=theme.DIM)
+        y += 1
+        _panel(canvas, y, "USO IA (REPORTADO)", fg=theme.CYAN, bold=True)
+        y += 1
+        visible_entries = list(reversed(selected_usage.entries[-3:]))
+        for entry in visible_entries:
+            effort = entry.reasoning_effort or "-"
+            _panel(
+                canvas,
+                y,
+                f"{entry.model} / {effort}: {entry.input_tokens} in / {entry.output_tokens} out",
+            )
+            y += 1
+        if len(selected_usage.entries) > len(visible_entries):
+            _panel(
+                canvas,
+                y,
+                f"... +{len(selected_usage.entries) - len(visible_entries)} combinaciones",
+                fg=theme.DIM,
+            )
+            y += 1
+        _panel(
+            canvas,
+            y,
+            f"TOTAL {selected_usage.total_tokens} tokens - {_usage_cost_text(selected_usage)}",
+        )
+        y += 1
+    y += 1
 
     _panel(canvas, y, separator, fg=theme.DIM)
     y += 1
@@ -555,23 +659,15 @@ def _agent_line(index: int, agent: Agent, name: str, ascii_mode: bool = False) -
 
 
 def _status_tags(agent: Agent) -> list[str]:
-    tags: list[str] = []
-    attributes = agent.attributes
-    if agent.status is AgentStatus.DEAD:
-        tags.append("MUERTO")
-    if attributes.hunger > 70:
-        tags.append("HAMBRE")
-    if attributes.thirst > 70:
-        tags.append("SED")
-    if attributes.energy < 20:
-        tags.append("AGOTADO")
-    if attributes.wetness > 60:
-        tags.append("MOJADO")
-    if attributes.body_temperature_centi < 3500:
-        tags.append("FRÍO")
-    if attributes.body_temperature_centi > 4000:
-        tags.append("CALOR")
-    return tags
+    return [_STATUS_LABELS[tag] for tag in status_tags(agent)]
+
+
+def _usage_cost_text(usage: AgentUsage) -> str:
+    if usage.cost_usd is None:
+        return "costo desconocido"
+    suffix = "" if usage.cost_complete else " + ?"
+    source = _COST_SOURCE_LABELS[usage.cost_source]
+    return f"USD {usage.cost_usd:.4f}{suffix} ({source})"
 
 
 def _bar(value: float, maximum: float, ascii_mode: bool = False) -> str:

@@ -49,6 +49,8 @@ class TileType(StrEnum):
             TileType.TREE,
             TileType.PALM,
             TileType.ROCK,
+            TileType.WORKBENCH,
+            TileType.FIRE,
         }
 
     @property
@@ -64,6 +66,32 @@ class TileType(StrEnum):
     def drinkable(self) -> bool:
         """Return whether the tile provides fresh drinking water."""
         return self is TileType.FRESH_WATER
+
+    @property
+    def glyph(self) -> str:
+        """Return the canonical Unicode glyph for observations and rendering."""
+        return _UNICODE_GLYPHS[self]
+
+
+_UNICODE_GLYPHS: dict[TileType, str] = {
+    TileType.DEEP_WATER: "≈",
+    TileType.SHALLOW_WATER: "~",
+    TileType.FRESH_WATER: "~",
+    TileType.SAND: "·",
+    TileType.GRASS: ",",
+    TileType.TALL_GRASS: '"',
+    TileType.TREE: "♣",
+    TileType.PALM: "♣",
+    TileType.BUSH: "♠",
+    TileType.ROCK: "▲",
+    TileType.ROCKY_GROUND: "▒",
+    TileType.CLAY: "▓",
+    TileType.WORKBENCH: "≡",
+    TileType.SHELTER: "∩",
+    TileType.FIRE: "*",
+    TileType.CORPSE: "☠",
+    TileType.GROUND_ITEM: "!",
+}
 
 
 @dataclass(frozen=True, slots=True)

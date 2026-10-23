@@ -129,7 +129,8 @@ La interfaz debe permitir responder en segundos:
 ### 2.5 Restricciones
 
 - Python 3.12 o superior.
-- `python-tcod` como motor de consola y entrada.
+- `python-tcod` como motor central de consola/entrada, FOV, pathfinding y utilidades espaciales, con una versión fijada y compatible.
+- El azar de la simulación no usará el RNG de `tcod`: seguirá pasando por el RNG determinista de IASim.
 - SDK oficial de MCP para Python, con transporte HTTP *streamable*.
 - Interfaz base fija de 160 × 45; mapa de 80 × 40.
 - Español para la UI; inglés para nombres de tools, campos MCP y logs estructurados.
@@ -188,16 +189,18 @@ Componentes internos:
 
 | Módulo | Responsabilidad |
 |---|---|
-| `core/` | Simulación pura y determinista: mundo, agentes, necesidades, combate, clima, turnos. Sin dependencia de UI. |
-| `world/` | Generación de isla, tiles, recursos, FOV, pathfinding y memoria. |
+| `core/` | Simulación pura y determinista: mundo, agentes, necesidades, combate, clima, turnos. Sin dependencia de UI ni de tipos nativos de `tcod`. |
+| `world/` | Generación de isla, tiles, recursos, FOV, pathfinding y memoria; los adaptadores `tcod` convierten máscaras y rutas en datos inmutables del dominio. |
 | `agents/` | Modelo de agente, atributos, estados, inventario y equipo. |
 | `actions/` | Validación y resolución de acciones atómicas y compuestas. |
 | `crafting/` | Recetas, estaciones y construcción. |
 | `mcp_server/` | Adaptador MCP, autenticación, tools, cola de acciones y timeouts. |
-| `ui/` | Render libtcod, panel de observabilidad, overlays y atajos. |
+| `ui/` | Consola, entrada, panel de observabilidad, overlays y atajos con `tcod`. |
 | `persistence/` | Guardado, carga, snapshots, logs y replay. |
 | `metrics/` | Cálculo de métricas y resumen de sesión. |
 | `reference_agent/` | Cliente MCP de referencia, determinista. |
+
+Los adaptadores `tcod` son la única frontera con la librería nativa: reciben el estado inmutable, producen posiciones o rutas ordenadas y nunca filtran arrays de `tcod` al dominio. La versión de `python-tcod` se fija en `pyproject.toml` y se cubre con pruebas doradas en Windows y Linux.
 
 ### 3.2 Ciclo de turno
 
@@ -227,6 +230,7 @@ Reglas adicionales:
 - Un agente que duerme (`sleep`) no bloquea el turno: el servidor lo considera en espera automática hasta que despierte o sea interrumpido.
 - La pausa del operador detiene el reloj y los plazos; los agentes no reciben nuevos ticks.
 - La velocidad de UI solo cambia la cadencia de presentación, no las reglas ni la simulación headless.
+- `move_to` calcula la ruta con `tcod.path` (AStar o Dijkstra determinista) y avanza un paso por tick; los empates se resuelven por coordenada para que el resultado no dependa del orden de iteración.
 
 ### 3.3 Mundo y mapa
 
@@ -245,7 +249,7 @@ Reglas adicionales:
   - apariciones separadas al menos 8 celdas;
   - no hay apariciones dentro de agua, roca, fuego o estructuras.
 - El mapa completo es el mundo: no hay mapas secundarios ni scroll en el MVP.
-- El operador ve el mundo completo; los agentes solo ven su percepción.
+- El operador puede ver el mundo completo; los agentes solo ven su percepción. El modo foco muestra la percepción del agente seleccionado.
 
 #### 3.3.1 Tiles y glifos
 
@@ -423,6 +427,7 @@ energia  -= 0.25 × factor_actividad
 - El crafteo consume la acción del tick y los materiales; no hay probabilidad de fallo en el MVP.
 - La construcción coloca una estructura en una celda adyacente transitable y libre.
 - Recursos regenerables: arbustos (bayas) y ramas de árbol; los peñascos y la piedra superficial son finitos por celda.
+- Un recurso regenerable agotado vuelve 288 ticks después (un día con la configuración por defecto), hasta su cantidad original; no crea nodos nuevos ni duplica los existentes.
 
 | Receta | Nivel | Estación | Ingredientes | Resultado |
 |---|---:|---|---|---|
@@ -445,10 +450,10 @@ energia  -= 0.25 × factor_actividad
 
 ### 3.8 Percepción y memoria
 
-- FOV por *shadowcasting* determinista, con línea de visión.
+- FOV calculado con `tcod.map.compute_fov` usando *shadowcasting* determinista, línea de visión y paredes visibles (`light_walls`).
 - Radio efectivo:
   `visión_base × factor_luz × factor_clima + bonificación_antorcha`.
-- Árboles, peñascos y estructuras opacas bloquean la visión. Arbustos y pasto alto no.
+- Árboles, peñascos y estructuras opacas bloquean la visión. Arbustos y pasto alto no. Las paredes visibles aparecen, pero ocultan las celdas posteriores.
 - Cada agente mantiene memoria de:
   - tiles vistos;
   - recursos vistos y tick de última observación;
@@ -456,13 +461,14 @@ energia  -= 0.25 × factor_actividad
   - agentes vistos por última vez.
 - La memoria puede quedar desactualizada: un recurso recordado puede haber sido recolectado.
 - La observación incluye solo lo visible y las actualizaciones de memoria; nunca el mapa completo.
-- El operador humano sí ve el mapa completo, pero la capa `V` muestra la percepción del agente seleccionado.
+- El operador puede ver el mapa completo. Al enfocar un agente, el mapa muestra únicamente su FOV y memoria; `V` alterna entre el foco del agente y el mapa completo del operador.
 - El agente puede inspeccionar una entidad visible para obtener detalles (estado aproximado, equipo visible, relación).
 - Los mensajes se oyen en radio 8; el ruido de combate se registra en radio 12.
 
 ### 3.9 Comunicación, alianzas y comercio
 
 - `say`: mensaje de texto libre, máximo 280 caracteres, radio 8, una vez por tick y **no consume** la acción principal.
+- Sin `target_id`, el mensaje se entrega a todos los agentes vivos en radio 8; con `target_id`, solo a ese agente si está en radio.
 - El mensaje se entrega al inicio del tick siguiente a los agentes en rango. El operador lo ve de inmediato en el log.
 - No hay chat global.
 - Los pensamientos reportados **no** se comparten automáticamente con otros agentes; el operador los ve, los demás solo ven lo que el agente decide comunicar.
@@ -588,7 +594,7 @@ Leyenda de prioridad:
 
 | ID | Requerimiento | Prioridad | Fase |
 |---|---|---|---|
-| RF-501 | El sistema debe calcular FOV por shadowcasting determinista. | M | F1 |
+| RF-501 | El sistema debe calcular FOV con `tcod.map.compute_fov` usando shadowcasting determinista. | M | F1 |
 | RF-502 | La visión debe verse afectada por luz, clima, antorcha, fuego y bloqueos. | M | F1 |
 | RF-503 | Cada agente debe mantener memoria de tiles, recursos, estructuras y agentes vistos. | M | F1 |
 | RF-504 | La observación MCP debe incluir solo lo visible y las actualizaciones de memoria. | M | F1 |
@@ -596,7 +602,7 @@ Leyenda de prioridad:
 | RF-506 | El sistema debe incluir agentes e ítems visibles en la observación. | M | F1 |
 | RF-507 | El sistema debe permitir inspeccionar entidades visibles. | S | F1 |
 | RF-508 | El sistema debe marcar recursos recordados como potencialmente desactualizados. | S | F1 |
-| RF-509 | El operador debe poder alternar la capa de FOV/memoria del agente seleccionado. | M | F1 |
+| RF-509 | Al enfocar un agente, el mapa debe mostrar únicamente su FOV/memoria; el operador debe poder alternar entre ese foco y el mapa completo. | M | F1 |
 | RF-510 | El operador debe poder inspeccionar tiles y entidades con un cursor. | S | F1 |
 
 ### 4.6 Acciones e inventario (RF-600)
@@ -658,7 +664,7 @@ Leyenda de prioridad:
 | RF-904 | El sistema debe permitir huir y aplicar sangrado con venda. | M | F1 |
 | RF-905 | La muerte debe ser permanente y generar un cadáver saqueable. | M | F1 |
 | RF-906 | El sistema debe registrar autor, causa y tick de cada muerte. | M | F1 |
-| RF-907 | La sesión debe terminar cuando muere el último agente vivo. | M | F1 |
+| RF-907 | La muerte del último agente vivo no debe finalizar el servidor; la simulación queda esperando y el operador decide cuándo terminar o reiniciar. | M | F1 |
 | RF-908 | La UI debe mostrar cadáveres, causa de muerte y botín disponible. | M | F1 |
 | RF-909 | En fase 2 se agrega fauna pasiva y pesca como alimento; depredadores complejos y NPCs sociales quedan fuera de alcance. | S | F2 |
 | RF-910 | Armaduras, infecciones y heridas avanzadas quedan para fase 2. | C | F2 |
@@ -682,6 +688,7 @@ Leyenda de prioridad:
 | RF-1013 | El sistema debe registrar todas las llamadas de acción y sus resultados. | M | F1 |
 | RF-1014 | El sistema debe fijar y documentar la versión del protocolo y del esquema. | M | F1 |
 | RF-1015 | Un agente desconectado debe retirarse del mundo y liberar su slot/token; una conexión nueva puede ocupar ese slot, sin reanudar el estado anterior. | M | F1 |
+| RF-1016 | El sistema debe aceptar y acumular por agente el uso de IA reportado (modelo, esfuerzo, tokens de entrada/salida y costo) sin alterar la simulación. | S | F1 |
 
 ### 4.11 Interfaz de usuario (RF-1100)
 
@@ -715,6 +722,7 @@ Leyenda de prioridad:
 | RF-1126 | La UI debe estar en español y los identificadores MCP en inglés. | M | F1 |
 | RF-1127 | La UI debe permitir mouse opcional para seleccionar agentes y tiles en F2; toda función crítica debe seguir teniendo atajo de teclado. | S | F2 |
 | RF-1128 | El operador debe disponer de una consola de debug (`F12`) para inyectar recursos, clima, hora y teletransporte, sin exponerla por MCP. | S | F2 |
+| RF-1129 | La ficha del agente debe mostrar el uso de IA reportado: modelo, esfuerzo, tokens de entrada/salida/total y costo aproximado en USD. | S | F1 |
 
 ### 4.12 Persistencia, replay y métricas (RF-1200)
 
@@ -776,7 +784,7 @@ Leyenda de prioridad:
 | Panel derecho | x 80–159, y 0–43 | 80 × 44 | Observabilidad |
 | Barra inferior | x 0–159, y 44 | 160 × 1 | Atajos persistentes |
 
-El renderizado se realiza en una consola libtcod de 160 × 45. La fuente por defecto es monoespaciada Unicode de 12 × 24 px (ventana 1920 × 1080); la escala puede ajustarse para pantallas menores. La UI base no hace scroll del mapa: la isla completa está siempre visible.
+El renderizado y la entrada se realizan con una consola libtcod de 160 × 45. La fuente por defecto es monoespaciada Unicode de 12 × 24 px (ventana 1920 × 1080); la escala puede ajustarse para pantallas menores. La UI base no hace scroll del mapa: la isla completa está visible en el modo de mapa completo; el modo foco muestra el FOV/memoria del agente seleccionado.
 
 #### 5.2.1 Mockup conceptual
 
@@ -840,6 +848,7 @@ El panel derecho debe priorizar la lectura rápida. La pestaña `RESUMEN` agrupa
    - Fuerza, destreza, resistencia y visión efectiva.
    - Capacidad de carga usada/total.
    - Inventario resumido y equipo.
+   - Uso de IA reportado: modelo, esfuerzo, tokens de entrada/salida/total y costo aproximado en USD.
    - El inventario completo y el equipo están en `VÍNCULOS` y en `F2`.
 
 4. **Mente (reportado)**
@@ -959,12 +968,14 @@ Las flechas, `PgUp`/`PgDn` e `Inicio`/`Fin` controlan la pestaña activa del pan
 
 | Tecla | Acción |
 |---|---|
-| `V` | Alternar capa de FOV/memoria del agente seleccionado. |
+| `V` | Alternar foco de FOV/memoria del agente seleccionado / mapa completo. |
 | `W` | Alternar capa de clima (lluvia y viento en el MVP; nieve en F2). |
 | `X` | Activar/desactivar cursor de inspección. |
 | Flechas | Mover el cursor de inspección cuando `X` está activo. |
 | `Enter` | Fijar/liberar la inspección de la celda o entidad. |
 | `Esc` | Cerrar cursor/inspección. |
+
+Al seleccionar un agente y activar el foco, el mapa renderiza solo sus celdas visibles y su memoria; `V` vuelve al mapa completo del operador sin alterar la simulación ni los datos del agente.
 
 #### 5.5.3 Vistas a pantalla completa
 
@@ -1007,7 +1018,7 @@ Layout de tres columnas:
 
 | Columna izquierda | Columna central | Columna derecha |
 |---|---|---|
-| Identidad, posición, salud, necesidades, temperatura, estados, habilidades, equipo y carga. | Mente: intención, pensamiento, plan, próximo paso y timeline de reportes/acciones (últimos 20). | Inventario completo, relaciones, alianzas, ofertas, mensajes y causa de muerte si corresponde. |
+| Identidad, posición, salud, necesidades, temperatura, estados, habilidades, equipo, carga y uso de IA reportado. | Mente: intención, pensamiento, plan, próximo paso y timeline de reportes/acciones (últimos 20). | Inventario completo, relaciones, alianzas, ofertas, mensajes y causa de muerte si corresponde. |
 
 - Se abre con el agente seleccionado.
 - `Tab` cicla agentes sin salir.
@@ -1183,6 +1194,7 @@ El reporte es **voluntario, no verificado y potencialmente engañoso**. La UI lo
 | `iasim_inspect` | `target_id` o `x,y` | Libre | Detalle de una entidad visible. |
 | `iasim_get_session_info` | — | Libre | Seed, día, tick, versión, estado de pausa y agentes. |
 | `iasim_report_mind` | `tick`, `intent`, `thought`, `plan?`, `confidence?` | Libre, 1/tick | Reporta intención/pensamiento para el operador. |
+| `iasim_report_usage` | `tick`, `input_tokens`, `output_tokens`, `model`, `reasoning_effort?`, `cost_usd?` | Libre, acumulativo | Reporta uso de IA para el operador; no consume acción ni altera la simulación. |
 | `iasim_leave` | — | — | Cierra la sesión del agente; no lo mata. |
 
 #### 6.3.2 Acciones principales (máximo una por tick)
@@ -1192,7 +1204,7 @@ Todas las acciones principales aceptan `tick`, `request_id?` y `reason?` (≤ 28
 | Tool | Argumentos | Descripción |
 |---|---|---|
 | `iasim_move` | `dx`, `dy` | Mueve una celda en 8 direcciones. |
-| `iasim_move_to` | `x`, `y` | Calcula ruta y avanza un paso este tick. |
+| `iasim_move_to` | `x`, `y` | Calcula una ruta determinista con `tcod.path` y avanza un paso este tick. |
 | `iasim_wait` | — | Espera sin moverse. |
 | `iasim_gather` | `x`, `y` o `node_id` | Recolecta un recurso adyacente/visible. |
 | `iasim_pickup` | `x`, `y`, `item_id?` | Recoge un ítem del suelo. |
@@ -1222,7 +1234,11 @@ Todas las acciones principales aceptan `tick`, `request_id?` y `reason?` (≤ 28
 #### 6.3.3 Reglas de las tools
 
 - Una acción principal por tick; `iasim_say` y `iasim_report_mind` son gratuitas.
+- `iasim_report_mind` acepta un reporte por tick, lo sanea, lo escribe en `thoughts.jsonl` y solo lo expone al operador.
 - Las tools de información no consumen acción, pero están limitadas por tasa.
+- `iasim_report_usage` es gratuito y acumulativo por agente; agrupa por modelo y esfuerzo, y se descarta al desconectarse el agente.
+- El `tick` de uso puede ser el actual o uno anterior, para tolerar latencia del modelo; un tick futuro se rechaza.
+- El costo reportado por el agente tiene prioridad; si falta, se estima con `[usage.pricing]`; si tampoco hay precio, queda como desconocido.
 - Toda acción devuelve `queued`; el resultado final aparece en la observación siguiente como `action_result`.
 - Las acciones se validan al encolar y se revalidan al resolver; una acción puede fallar si el mundo cambió.
 - `request_id` es idempotente durante la sesión: repetir la misma llamada no duplica la acción.
@@ -1324,11 +1340,13 @@ La observación es el contrato principal entre el juego y el agente. Ejemplo abr
 Campos obligatorios:
 
 - `schema_version`, `tick`, `session`, `server_time_ms`, `deadline_ms`.
-- `session.phase` es `waiting`, `running` o `finished`; incluye `max_agents`, `joined_agents` y `alive_agents`, y `end_reason` si terminó.
+- `session.phase` es `waiting`, `running` o `finished`; incluye `max_agents`, `joined_agents` y `alive_agents`, `waiting_reason` si está esperando (`no_agents`, `no_active_agents` o `last_death`) y `end_reason` si terminó.
 - `time`, `agent`, `environment`.
 - `perception.visible`, `perception.memory_updates`, `perception.agents`, `perception.messages`.
 - `inventory` y `available_actions`.
 - `last_action_result` si existe.
+
+El uso de IA reportado no forma parte de la observación del agente ni del estado canónico de la simulación; se acumula para el operador y se descarta al desconectarse el agente.
 
 En fase 2, `environment` incluye además `forecast` cuando el pronóstico está habilitado:
 
@@ -1379,6 +1397,11 @@ Las tools devuelven un resultado estructurado. Los errores de validación se dev
 | `NOT_IN_RANGE` | Interlocutor fuera del rango social. |
 | `RATE_LIMITED` | Demasiadas llamadas. |
 | `MESSAGE_TOO_LONG` | Texto excede el límite. |
+| `INVALID_MESSAGE` | El mensaje queda vacío después de sanearlo. |
+| `ALREADY_SAID` | El agente ya envió su mensaje local en este tick. |
+| `INVALID_MIND_REPORT` | Reporte de mente vacío, mal tipado o con confianza inválida. |
+| `ALREADY_REPORTED` | El agente ya envió su reporte de mente en este tick. |
+| `INVALID_USAGE` | Reporte de uso inválido: modelo, esfuerzo, tokens o costo fuera de rango. |
 | `NO_NEW_TICK` | `wait_for_tick` venció sin tick nuevo. |
 | `INTERNAL_ERROR` | Error inesperado; el servidor sigue operativo. |
 
@@ -1386,6 +1409,7 @@ Las tools devuelven un resultado estructurado. Los errores de validación se dev
 
 - Rate limit sugerido: 20 llamadas de información por segundo y 5 llamadas de acción por segundo por agente; la segunda acción del tick se rechaza.
 - `say.message` ≤ 280 caracteres; `report_mind.thought` ≤ 500; `intent` ≤ 160; `plan` ≤ 300; `reason` ≤ 280.
+- `report_usage.model` = 1-80 caracteres imprimibles; `reasoning_effort` ≤ 32; tokens ≥ 0; `cost_usd` finito y ≥ 0.
 - Se eliminan caracteres de control, ANSI y saltos de línea excesivos.
 - Toda entrada se valida con esquemas Pydantic y rangos cerrados.
 - No se usa `eval`, `exec` ni se interpretan expresiones enviadas por agentes.
@@ -1447,6 +1471,14 @@ map_zoom_font_height = 24
 dir = "runs"
 snapshot_every_ticks = 100
 export_csv = true
+
+[usage]
+# Precios opcionales en USD por millón de tokens. Sin precio, el costo
+# solo se conoce si el agente lo reporta.
+
+[usage.pricing."gpt-5"]
+input_per_million_usd = 1.25
+output_per_million_usd = 10.0
 
 [debug]
 enabled = true
@@ -1693,6 +1725,7 @@ Objetivo: sandbox de supervivencia observable y testeable.
 - MCP con todas las tools, auth, timeouts e idempotencia.
 - Servidor LAN permanente con GUI de operador, agentes efímeros por conexión, máximo concurrente configurable, monitoreo en vivo y logs.
 - Panel derecho completo: agentes, ficha, mente, entorno, relaciones y eventos.
+- Uso de IA reportado por agente: modelo, esfuerzo, tokens y costo aproximado.
 - Pensamientos reportados y timeline.
 - Vistas `F1`–`F8` y atajos.
 - Guardado/carga, logs JSONL, métricas y replay.
@@ -1773,7 +1806,7 @@ Objetivo: sandbox de supervivencia observable y testeable.
 | Atributos | Necesidades + capacidades + clima. |
 | Crafteo | Dos niveles, con mesa de trabajo. |
 | Clima | MVP: día/noche, lluvia, tormenta, niebla, viento y temperatura; nieve por tile y estaciones de 7 días en F2. |
-| Percepción | Limitada por FOV + memoria; el operador ve todo. |
+| Percepción | Limitada por FOV + memoria; el operador puede alternar mapa completo y foco del agente. |
 | Acciones MCP | Atómicas + `move_to`; una acción principal por tick. |
 | Agente de prueba | Agente scripted de referencia incluido. |
 | Interacción | Cooperación, competencia, comercio, alianzas y eliminación; los agentes deciden. |

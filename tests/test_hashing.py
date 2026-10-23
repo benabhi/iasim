@@ -15,6 +15,7 @@ from iasim.domain.world import Structure, StructureKind
 
 BERRY = ItemDefinition(ItemId("berry"), 50, True, 99)
 WOOD = ItemDefinition(ItemId("wood"), 1000, True, 99)
+WATERSKIN = ItemDefinition(ItemId("waterskin"), 500, False, 1)
 
 
 def _world() -> WorldMap:
@@ -146,6 +147,23 @@ class CanonicalHashTests(unittest.TestCase):
         self.assertNotEqual(
             canonical_state_hash(base),
             canonical_state_hash(_state(agents=(changed_agent, other))),
+        )
+
+    def test_waterskin_charges_change_hash(self) -> None:
+        empty = Agent(
+            AgentId("ag_01"),
+            Position(1, 1),
+            inventory=Inventory.for_strength(5).add(ItemStack(WATERSKIN, 1)),
+        )
+        filled = Agent(
+            AgentId("ag_01"),
+            Position(1, 1),
+            inventory=Inventory.for_strength(5).add(ItemStack(WATERSKIN, 1, charges=2)),
+        )
+
+        self.assertNotEqual(
+            canonical_state_hash(_state(agents=(empty,))),
+            canonical_state_hash(_state(agents=(filled,))),
         )
 
 
