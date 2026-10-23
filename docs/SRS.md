@@ -503,7 +503,7 @@ energia  -= 0.25 × factor_actividad
 
 ### 3.11 Sesión y servidor abierto
 
-- El comando de arranque genera el mundo, abre la GUI del operador y levanta el servidor MCP. La isla y la GUI son visibles desde el inicio, aunque no haya agentes.
+- El comando principal (`iasim`; alias `iasim serve` y `python -m iasim`) genera el mundo, abre la GUI completa del operador (vista 160 × 45 con mapa, panel derecho por pestañas y barra inferior) y levanta el servidor MCP. La isla y la GUI son visibles desde el inicio, aunque no haya agentes.
 - No hay lobby, mínimo obligatorio ni cuenta regresiva. El operador configura el máximo de agentes concurrentes (1–8); los agentes pueden conectarse y desconectarse mientras el servidor esté vivo.
 - El tick 0 es el estado inicial del mundo. La simulación no avanza mientras no haya agentes conectados o activos; al entrar un agente, la GUI lo muestra y el reloj continúa.
 - El operador puede pausar, cambiar velocidad, guardar, abrir vistas y finalizar el servidor. La GUI es la vista del operador: muestra el mundo completo y a todos los agentes conectados; los agentes siguen recibiendo solo su percepción.
@@ -1451,21 +1451,33 @@ confirm_destructive = true
 
 | Comando / flag | Descripción |
 |---|---|
-| `iasim serve` | Inicia la GUI del operador y el servidor MCP con la configuración por defecto. |
-| `python -m iasim` | Alias del arranque integrado `iasim serve`. |
-| `--config PATH` | Carga un TOML. |
+| `iasim` | Comando principal: inicia la GUI completa del operador, el mundo y el servidor MCP con la configuración por defecto. |
+| `iasim serve` | Alias explícito del comando principal. |
+| `python -m iasim` | Alias del comando principal. |
+| `--config PATH` | Carga un TOML. Los flags de CLI tienen prioridad sobre el archivo. |
 | `--seed N` | Fija la seed. |
 | `--headless` | Ejecuta el servidor sin GUI. |
 | `--host H` | Host de escucha; por defecto `127.0.0.1`. La LAN se habilita explícitamente con `0.0.0.0` o la IP local. |
 | `--max-agents N` | Máximo de agentes concurrentes (1–8). |
 | `--port N` | Puerto MCP. |
+| `--tick-minutes N` | Minutos de juego por tick. |
+| `--turn-timeout-ms N` | Plazo de acción por tick. |
+| `--timeout-disconnects N` | Timeouts consecutivos antes de marcar ausente. |
+| `--snapshot-every N` | Cadencia de snapshots. |
+| `--autosave-every N` | Cadencia de autoguardado. |
+| `--no-autosave` | Desactiva autoguardado. |
+| `--log-dir PATH` | Directorio de logs. |
 | `--dev-open` | Desactiva auth solo en loopback. |
 | `--load PATH` | Carga una sesión guardada. |
 | `--replay PATH` | Reproduce una corrida. |
-| `--no-autosave` | Desactiva autoguardado. |
-| `--log-dir PATH` | Directorio de logs. |
 | `--version` | Versión de IASim y del esquema MCP. |
 | `python -m iasim.reference_agent` | Lanza el agente de referencia. |
+
+La GUI que abre el comando principal es la vista completa definida en §5.3 y §5.5, no una versión reducida. `--headless` es la única variante sin ventana y conserva la misma simulación y contrato MCP. Cualquier valor de `[game]`, `[world]`, `[weather]`, `[mcp]`, `[ui]`, `[logs]` y `[debug]` puede fijarse en TOML; para opciones no listadas en la tabla se usa `--config`.
+
+```bash
+iasim --config config/iasim.toml --host 0.0.0.0 --port 8765 --max-agents 8 --seed 42
+```
 
 Códigos de salida:
 
