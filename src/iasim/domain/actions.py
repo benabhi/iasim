@@ -23,6 +23,7 @@ class ActionKind(StrEnum):
     BUILD = "build"
     USE_ITEM = "use_item"
     TRADE = "trade"
+    LOOT = "loot"
     ATTACK = "attack"
     WAIT = "wait"
     REST = "rest"
@@ -49,6 +50,7 @@ _ACTION_ORDER: dict[ActionKind, int] = {
     ActionKind.DRINK: 4,
     ActionKind.FILL: 4,
     ActionKind.USE_ITEM: 4,
+    ActionKind.LOOT: 4,
     ActionKind.TRADE: 5,
     ActionKind.ATTACK: 6,
     ActionKind.WAIT: 7,

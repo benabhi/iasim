@@ -12,7 +12,7 @@ from iasim.domain.combat import CombatOutcome, combat_resolvers
 from iasim.domain.geometry import Position
 from iasim.domain.hashing import canonical_state_hash
 from iasim.domain.identifiers import AgentId
-from iasim.domain.items import Inventory, ItemStack
+from iasim.domain.items import EquipSlot, Inventory, ItemStack
 from iasim.domain.session import SessionState
 from iasim.domain.tiles import TileType, WorldMap
 from iasim.domain.turns import TurnEngine
@@ -106,10 +106,15 @@ class CombatTests(unittest.TestCase):
         self.assertEqual(reached.agents[1].attributes.health_centi, 100 * 100)
         self.assertEqual(reached.rng_state, 11400714819323198527)
 
-    def test_hit_can_kill_and_marks_the_target_dead(self) -> None:
+    def test_hit_can_kill_and_leave_a_lootable_corpse(self) -> None:
         reached, outcome = _attack(
             _state(
-                target=_agent("ag_02", Position(3, 2), health_centi=100),
+                target=_agent(
+                    "ag_02",
+                    Position(3, 2),
+                    health_centi=100,
+                    weapon="stone_spear",
+                ),
                 seed=1,
             )
         )
@@ -117,6 +122,15 @@ class CombatTests(unittest.TestCase):
         self.assertEqual(outcome, CombatOutcome.KILLED.value)
         self.assertEqual(reached.agents[1].status, AgentStatus.DEAD)
         self.assertEqual(reached.agents[1].attributes.health_centi, 0)
+        self.assertEqual(reached.agents[1].equipment.items, ())
+        self.assertEqual(len(reached.corpses), 1)
+        corpse = reached.corpses[0]
+        self.assertEqual(corpse.agent_id, "ag_02")
+        self.assertEqual(corpse.death_tick, 0)
+        self.assertEqual(corpse.cause, "attack")
+        self.assertEqual(corpse.killer_id, "ag_01")
+        self.assertTrue(corpse.has_items)
+        self.assertIsNotNone(corpse.equipment.item(EquipSlot.HAND))
 
     def test_out_of_range_and_self_targets_are_rejected_without_rng_use(self) -> None:
         out_of_range = _state(

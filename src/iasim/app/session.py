@@ -27,12 +27,14 @@ from iasim.domain.chat import (
 from iasim.domain.climate import apply_climate_tick, effective_vision
 from iasim.domain.combat import combat_resolvers
 from iasim.domain.construction import advance_fires, construction_resolvers
+from iasim.domain.corpse import Corpse
 from iasim.domain.crafting_actions import crafting_resolvers
 from iasim.domain.geometry import Position
 from iasim.domain.hashing import canonical_state_hash
 from iasim.domain.identifiers import AgentId
 from iasim.domain.item_actions import item_action_resolvers
-from iasim.domain.items import GroundItem, ItemStack
+from iasim.domain.items import Equipment, GroundItem, Inventory, ItemStack
+from iasim.domain.loot import loot_resolvers
 from iasim.domain.memory import AgentMemory, MemoryEntry
 from iasim.domain.mind import (
     MAX_INTENT_LENGTH,
@@ -187,6 +189,7 @@ class GameSession:
             **crafting_resolvers(self._catalog),
             **construction_resolvers(self._catalog),
             **combat_resolvers(),
+            **loot_resolvers(),
             **rest_sleep_resolvers(),
         }
         self._phase = SessionPhase.WAITING
@@ -882,6 +885,15 @@ class GameSession:
             (("target_id", target_id),),
         )
 
+    def loot(self, agent_id: str, tick: int, corpse_id: str) -> dict[str, Any]:
+        """Queue looting an adjacent corpse."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.LOOT,
+            (("corpse_id", corpse_id),),
+        )
+
     def _queue(
         self,
         agent_id: str,
@@ -1171,6 +1183,9 @@ class GameSession:
         structures_by_position = {
             structure.position: structure for structure in self._state.structures
         }
+        corpses_by_position: dict[Position, list[Corpse]] = {}
+        for corpse in self._state.corpses:
+            corpses_by_position.setdefault(corpse.position, []).append(corpse)
         visible = []
         for position in sorted(
             visible_positions,
@@ -1191,6 +1206,8 @@ class GameSession:
             structure = structures_by_position.get(position)
             if structure is not None:
                 entities.append({"type": "structure", "kind": structure.kind.value})
+            for corpse in corpses_by_position.get(position, ()):
+                entities.append(corpse.as_observation())
             visible.append(
                 {
                     "x": position.x,
@@ -1331,6 +1348,7 @@ class GameSession:
                 {"action": "craft", "available": True},
                 {"action": "build", "available": True},
                 {"action": "attack", "available": True},
+                {"action": "loot", "available": True},
                 {"action": "rest", "available": True},
                 {"action": "sleep", "available": True},
             ],
@@ -1369,6 +1387,7 @@ class GameSession:
         )
         state = apply_sleep_tick(state)
         state = apply_status_tick(state)
+        state = self._finalize_deaths_locked(state)
         state = replace(
             state,
             resource_nodes=advance_resource_nodes(
@@ -1378,6 +1397,31 @@ class GameSession:
         )
         self._advance_chat_locked(state.tick + 1)
         return self._update_memory_locked(state)
+
+    def _finalize_deaths_locked(self, state: SessionState) -> SessionState:
+        known = {corpse.agent_id for corpse in state.corpses}
+        corpses = list(state.corpses)
+        agents: list[Agent] = []
+        for agent in state.agents:
+            if agent.is_alive or agent.agent_id in known:
+                agents.append(agent)
+                continue
+            corpses.append(
+                Corpse.from_agent(
+                    agent,
+                    tick=state.tick,
+                    cause="environment",
+                )
+            )
+            agents.append(
+                replace(
+                    agent,
+                    inventory=Inventory.for_strength(agent.attributes.strength),
+                    equipment=Equipment(),
+                )
+            )
+            known.add(agent.agent_id)
+        return replace(state, agents=tuple(agents), corpses=tuple(corpses))
 
     def _advance_chat_locked(self, tick: int) -> None:
         ready = [message for message in self._pending_chat if message.deliver_tick <= tick]

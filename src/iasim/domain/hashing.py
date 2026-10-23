@@ -7,6 +7,7 @@ import json
 from typing import Any
 
 from iasim.domain.agents import Agent
+from iasim.domain.corpse import Corpse
 from iasim.domain.items import GroundItem, ItemStack
 from iasim.domain.resources import ResourceNode
 from iasim.domain.session import SessionState
@@ -83,6 +84,10 @@ def canonical_state_payload(state: SessionState) -> dict[str, Any]:
                     node.resource_id,
                 ),
             )
+        ],
+        "corpses": [
+            _corpse_payload(corpse)
+            for corpse in sorted(state.corpses, key=lambda corpse: corpse.corpse_id)
         ],
     }
 
@@ -178,6 +183,29 @@ def _ground_item_payload(item: GroundItem) -> dict[str, Any]:
         "x": item.position.x,
         "y": item.position.y,
         **_stack_payload(item.stack),
+    }
+
+
+def _corpse_payload(corpse: Corpse) -> dict[str, Any]:
+    return {
+        "corpse_id": corpse.corpse_id,
+        "agent_id": corpse.agent_id,
+        "x": corpse.position.x,
+        "y": corpse.position.y,
+        "death_tick": corpse.death_tick,
+        "cause": corpse.cause,
+        "killer_id": corpse.killer_id,
+        "inventory": [
+            _stack_payload(stack)
+            for stack in sorted(
+                corpse.inventory.stacks,
+                key=lambda stack: stack.definition.item_id,
+            )
+        ],
+        "equipment": [
+            {"slot": slot.value, "item_id": spec.item_id}
+            for slot, spec in sorted(corpse.equipment.items, key=lambda entry: entry[0].value)
+        ],
     }
 
 
