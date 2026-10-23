@@ -427,6 +427,7 @@ energia  -= 0.25 × factor_actividad
 - El crafteo consume la acción del tick y los materiales; no hay probabilidad de fallo en el MVP.
 - La construcción coloca una estructura en una celda adyacente transitable y libre.
 - Recursos regenerables: arbustos (bayas) y ramas de árbol; los peñascos y la piedra superficial son finitos por celda.
+- Un recurso regenerable agotado vuelve 288 ticks después (un día con la configuración por defecto), hasta su cantidad original; no crea nodos nuevos ni duplica los existentes.
 
 | Receta | Nivel | Estación | Ingredientes | Resultado |
 |---|---:|---|---|---|

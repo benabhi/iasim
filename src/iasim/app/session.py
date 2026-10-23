@@ -29,6 +29,11 @@ from iasim.domain.items import GroundItem, ItemStack
 from iasim.domain.memory import AgentMemory, MemoryEntry
 from iasim.domain.movement import movement_resolvers
 from iasim.domain.needs import apply_needs_tick
+from iasim.domain.resources import (
+    advance_resource_nodes,
+    available_resource_ids,
+    initial_resource_nodes,
+)
 from iasim.domain.rng import U64_MASK
 from iasim.domain.session import SessionState
 from iasim.domain.sleep import apply_sleep_tick, rest_sleep_resolvers
@@ -172,6 +177,7 @@ class GameSession:
             world=self._layout.world,
             tick_minutes=tick_minutes,
             weather=WeatherState.initial(weather_min_ticks),
+            resource_nodes=initial_resource_nodes(self._layout.world, self._catalog),
         )
         self._engine = TurnEngine(
             self._state,
@@ -903,6 +909,14 @@ class GameSession:
                 "outcome": event.outcome,
             }
 
+    def _resource_ids_at(self, state: SessionState, position: Position) -> tuple[str, ...]:
+        tile = state.world.tile_at(position)
+        if not state.resource_nodes:
+            return tuple(
+                resource.resource_id for resource in self._catalog.resources_for_tile(tile)
+            )
+        return available_resource_ids(state.resource_nodes, position, tile, self._catalog)
+
     def _observation(self, agent: Agent) -> dict[str, Any]:
         clock = self._engine.clock
         attributes = agent.attributes
@@ -930,9 +944,7 @@ class GameSession:
             key=lambda item: (item.y, item.x),
         ):
             tile = self._state.world.tile_at(position)
-            resources = [
-                resource.resource_id for resource in self._catalog.resources_for_tile(tile)
-            ]
+            resources = list(self._resource_ids_at(self._state, position))
             entities: list[dict[str, Any]] = []
             for ground in ground_items_by_position.get(position, ()):
                 entities.append(
@@ -1112,6 +1124,13 @@ class GameSession:
         )
         state = apply_sleep_tick(state)
         state = apply_status_tick(state)
+        state = replace(
+            state,
+            resource_nodes=advance_resource_nodes(
+                state.resource_nodes,
+                tick=state.tick + 1,
+            ),
+        )
         return self._update_memory_locked(state)
 
     def _update_memory_locked(self, state: SessionState) -> SessionState:
@@ -1133,12 +1152,7 @@ class GameSession:
                     position=position,
                     tile=state.world.tile_at(position),
                     last_seen_tick=state.tick,
-                    resources=tuple(
-                        resource.resource_id
-                        for resource in self._catalog.resources_for_tile(
-                            state.world.tile_at(position)
-                        )
-                    ),
+                    resources=self._resource_ids_at(state, position),
                     structure=next(
                         (
                             structure.kind
