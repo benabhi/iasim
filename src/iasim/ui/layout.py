@@ -12,6 +12,7 @@ from iasim.domain.clock import DayPhase, SimulationClock
 from iasim.domain.geometry import Position
 from iasim.domain.identifiers import AgentId
 from iasim.domain.session import SessionState
+from iasim.domain.status import Condition, status_tags
 from iasim.domain.tiles import TileType
 from iasim.domain.world import StructureKind
 from iasim.ui import theme
@@ -41,6 +42,18 @@ _PHASE_LABELS: dict[DayPhase, str] = {
     DayPhase.DAY: "DÍA",
     DayPhase.DUSK: "ATARDECER",
     DayPhase.NIGHT: "NOCHE",
+}
+
+_STATUS_LABELS: dict[Condition, str] = {
+    Condition.HUNGRY: "HAMBRE",
+    Condition.STARVING: "INANICIÓN",
+    Condition.THIRSTY: "SED",
+    Condition.DEHYDRATED: "DESHIDRATADO",
+    Condition.EXHAUSTED: "AGOTADO",
+    Condition.HYPOTHERMIA: "HIPOTERMIA",
+    Condition.HEAT_STROKE: "GOLPE DE CALOR",
+    Condition.WET: "MOJADO",
+    Condition.DEAD: "MUERTO",
 }
 
 
@@ -579,23 +592,7 @@ def _agent_line(index: int, agent: Agent, name: str, ascii_mode: bool = False) -
 
 
 def _status_tags(agent: Agent) -> list[str]:
-    tags: list[str] = []
-    attributes = agent.attributes
-    if agent.status is AgentStatus.DEAD:
-        tags.append("MUERTO")
-    if attributes.hunger > 70:
-        tags.append("HAMBRE")
-    if attributes.thirst > 70:
-        tags.append("SED")
-    if attributes.energy < 20:
-        tags.append("AGOTADO")
-    if attributes.wetness > 60:
-        tags.append("MOJADO")
-    if attributes.body_temperature_centi < 3500:
-        tags.append("FRÍO")
-    if attributes.body_temperature_centi > 4000:
-        tags.append("CALOR")
-    return tags
+    return [_STATUS_LABELS[tag] for tag in status_tags(agent)]
 
 
 def _bar(value: float, maximum: float, ascii_mode: bool = False) -> str:

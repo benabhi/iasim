@@ -28,6 +28,12 @@ from iasim.domain.movement import movement_resolvers
 from iasim.domain.needs import apply_needs_tick
 from iasim.domain.rng import U64_MASK
 from iasim.domain.session import SessionState
+from iasim.domain.status import (
+    apply_status_tick,
+    dexterity_penalty,
+    status_tags,
+    strength_penalty,
+)
 from iasim.domain.turns import (
     ActionRejectedError,
     ResolvedAction,
@@ -775,9 +781,12 @@ class GameSession:
                 "energy": attributes.energy,
                 "body_temp_c": attributes.body_temperature_c,
                 "wetness": attributes.wetness,
-                "status": [],
-                "strength": attributes.strength,
-                "dexterity": attributes.dexterity,
+                "status": [tag.value for tag in status_tags(agent)],
+                "strength": max(0, attributes.strength - strength_penalty(attributes)),
+                "dexterity": max(
+                    0,
+                    attributes.dexterity - dexterity_penalty(attributes),
+                ),
                 "endurance": attributes.endurance,
                 "effective_vision": vision_radius,
                 "carry_kg": inventory.total_weight_grams / 1000.0,
@@ -851,11 +860,12 @@ class GameSession:
         state = apply_weather_wetness(state)
         state = advance_fires(state)
         state = apply_climate_tick(state, self._engine.clock)
-        return apply_needs_tick(
+        state = apply_needs_tick(
             state,
             resolved_actions,
             ambient_temperature_centi=weather.ambient_temperature_centi,
         )
+        return apply_status_tick(state)
 
     def _write_tokens(self, path: Path) -> None:
         data = {

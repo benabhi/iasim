@@ -8,6 +8,7 @@ from iasim.domain.agents import Agent
 from iasim.domain.clock import SimulationClock
 from iasim.domain.geometry import Position
 from iasim.domain.session import SessionState
+from iasim.domain.status import vision_penalty
 from iasim.domain.tiles import TileType
 from iasim.domain.weather import BASE_TEMPERATURE_CENTI, WeatherState
 from iasim.domain.world import Structure, StructureKind
@@ -45,7 +46,7 @@ def effective_vision(
     bonus = agent.equipment.light_radius
     if _near_lit_fire(structures, agent.position, FIRE_LIGHT_RADIUS):
         bonus = max(bonus, FIRE_LIGHT_RADIUS)
-    return max(0, int(base + bonus + 0.5))
+    return max(0, int(base + bonus + 0.5) - vision_penalty(agent.attributes))
 
 
 def apply_climate_tick(
