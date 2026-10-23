@@ -256,7 +256,8 @@ git tag -a v0.1.0 -m "IASim MVP v0.1.0"
 - Package manager and runner: `uv`.
 - Dependency and tool configuration: `pyproject.toml`.
 - Source layout: `src/iasim/`; tests: `tests/`.
-- Rendering: `python-tcod` (libtcod).
+- Core spatial/UI toolkit: `python-tcod` (libtcod), pinned in `pyproject.toml`, for console/input, FOV, pathfinding, and spatial utilities.
+- `tcod` is accessed only through adapters outside the pure domain model; adapters return immutable domain values, never NumPy arrays. Never use `tcod` RNG for simulation.
 - MCP transport: local HTTP as specified in the SRS.
 - Data models and validation: Pydantic where a schema boundary exists; dataclasses or typed models for internal domain objects.
 - Tests: `pytest`.

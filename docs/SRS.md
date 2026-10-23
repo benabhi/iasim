@@ -129,7 +129,8 @@ La interfaz debe permitir responder en segundos:
 ### 2.5 Restricciones
 
 - Python 3.12 o superior.
-- `python-tcod` como motor de consola y entrada.
+- `python-tcod` como motor central de consola/entrada, FOV, pathfinding y utilidades espaciales, con una versión fijada y compatible.
+- El azar de la simulación no usará el RNG de `tcod`: seguirá pasando por el RNG determinista de IASim.
 - SDK oficial de MCP para Python, con transporte HTTP *streamable*.
 - Interfaz base fija de 160 × 45; mapa de 80 × 40.
 - Español para la UI; inglés para nombres de tools, campos MCP y logs estructurados.
@@ -188,16 +189,18 @@ Componentes internos:
 
 | Módulo | Responsabilidad |
 |---|---|
-| `core/` | Simulación pura y determinista: mundo, agentes, necesidades, combate, clima, turnos. Sin dependencia de UI. |
-| `world/` | Generación de isla, tiles, recursos, FOV, pathfinding y memoria. |
+| `core/` | Simulación pura y determinista: mundo, agentes, necesidades, combate, clima, turnos. Sin dependencia de UI ni de tipos nativos de `tcod`. |
+| `world/` | Generación de isla, tiles, recursos, FOV, pathfinding y memoria; los adaptadores `tcod` convierten máscaras y rutas en datos inmutables del dominio. |
 | `agents/` | Modelo de agente, atributos, estados, inventario y equipo. |
 | `actions/` | Validación y resolución de acciones atómicas y compuestas. |
 | `crafting/` | Recetas, estaciones y construcción. |
 | `mcp_server/` | Adaptador MCP, autenticación, tools, cola de acciones y timeouts. |
-| `ui/` | Render libtcod, panel de observabilidad, overlays y atajos. |
+| `ui/` | Consola, entrada, panel de observabilidad, overlays y atajos con `tcod`. |
 | `persistence/` | Guardado, carga, snapshots, logs y replay. |
 | `metrics/` | Cálculo de métricas y resumen de sesión. |
 | `reference_agent/` | Cliente MCP de referencia, determinista. |
+
+Los adaptadores `tcod` son la única frontera con la librería nativa: reciben el estado inmutable, producen posiciones o rutas ordenadas y nunca filtran arrays de `tcod` al dominio. La versión de `python-tcod` se fija en `pyproject.toml` y se cubre con pruebas doradas en Windows y Linux.
 
 ### 3.2 Ciclo de turno
 
@@ -227,6 +230,7 @@ Reglas adicionales:
 - Un agente que duerme (`sleep`) no bloquea el turno: el servidor lo considera en espera automática hasta que despierte o sea interrumpido.
 - La pausa del operador detiene el reloj y los plazos; los agentes no reciben nuevos ticks.
 - La velocidad de UI solo cambia la cadencia de presentación, no las reglas ni la simulación headless.
+- `move_to` calcula la ruta con `tcod.path` (AStar o Dijkstra determinista) y avanza un paso por tick; los empates se resuelven por coordenada para que el resultado no dependa del orden de iteración.
 
 ### 3.3 Mundo y mapa
 
@@ -245,7 +249,7 @@ Reglas adicionales:
   - apariciones separadas al menos 8 celdas;
   - no hay apariciones dentro de agua, roca, fuego o estructuras.
 - El mapa completo es el mundo: no hay mapas secundarios ni scroll en el MVP.
-- El operador ve el mundo completo; los agentes solo ven su percepción.
+- El operador puede ver el mundo completo; los agentes solo ven su percepción. El modo foco muestra la percepción del agente seleccionado.
 
 #### 3.3.1 Tiles y glifos
 
@@ -445,10 +449,10 @@ energia  -= 0.25 × factor_actividad
 
 ### 3.8 Percepción y memoria
 
-- FOV por *shadowcasting* determinista, con línea de visión.
+- FOV calculado con `tcod.map.compute_fov` usando *shadowcasting* determinista, línea de visión y paredes visibles (`light_walls`).
 - Radio efectivo:
   `visión_base × factor_luz × factor_clima + bonificación_antorcha`.
-- Árboles, peñascos y estructuras opacas bloquean la visión. Arbustos y pasto alto no.
+- Árboles, peñascos y estructuras opacas bloquean la visión. Arbustos y pasto alto no. Las paredes visibles aparecen, pero ocultan las celdas posteriores.
 - Cada agente mantiene memoria de:
   - tiles vistos;
   - recursos vistos y tick de última observación;
@@ -456,7 +460,7 @@ energia  -= 0.25 × factor_actividad
   - agentes vistos por última vez.
 - La memoria puede quedar desactualizada: un recurso recordado puede haber sido recolectado.
 - La observación incluye solo lo visible y las actualizaciones de memoria; nunca el mapa completo.
-- El operador humano sí ve el mapa completo, pero la capa `V` muestra la percepción del agente seleccionado.
+- El operador puede ver el mapa completo. Al enfocar un agente, el mapa muestra únicamente su FOV y memoria; `V` alterna entre el foco del agente y el mapa completo del operador.
 - El agente puede inspeccionar una entidad visible para obtener detalles (estado aproximado, equipo visible, relación).
 - Los mensajes se oyen en radio 8; el ruido de combate se registra en radio 12.
 
@@ -588,7 +592,7 @@ Leyenda de prioridad:
 
 | ID | Requerimiento | Prioridad | Fase |
 |---|---|---|---|
-| RF-501 | El sistema debe calcular FOV por shadowcasting determinista. | M | F1 |
+| RF-501 | El sistema debe calcular FOV con `tcod.map.compute_fov` usando shadowcasting determinista. | M | F1 |
 | RF-502 | La visión debe verse afectada por luz, clima, antorcha, fuego y bloqueos. | M | F1 |
 | RF-503 | Cada agente debe mantener memoria de tiles, recursos, estructuras y agentes vistos. | M | F1 |
 | RF-504 | La observación MCP debe incluir solo lo visible y las actualizaciones de memoria. | M | F1 |
@@ -596,7 +600,7 @@ Leyenda de prioridad:
 | RF-506 | El sistema debe incluir agentes e ítems visibles en la observación. | M | F1 |
 | RF-507 | El sistema debe permitir inspeccionar entidades visibles. | S | F1 |
 | RF-508 | El sistema debe marcar recursos recordados como potencialmente desactualizados. | S | F1 |
-| RF-509 | El operador debe poder alternar la capa de FOV/memoria del agente seleccionado. | M | F1 |
+| RF-509 | Al enfocar un agente, el mapa debe mostrar únicamente su FOV/memoria; el operador debe poder alternar entre ese foco y el mapa completo. | M | F1 |
 | RF-510 | El operador debe poder inspeccionar tiles y entidades con un cursor. | S | F1 |
 
 ### 4.6 Acciones e inventario (RF-600)
@@ -776,7 +780,7 @@ Leyenda de prioridad:
 | Panel derecho | x 80–159, y 0–43 | 80 × 44 | Observabilidad |
 | Barra inferior | x 0–159, y 44 | 160 × 1 | Atajos persistentes |
 
-El renderizado se realiza en una consola libtcod de 160 × 45. La fuente por defecto es monoespaciada Unicode de 12 × 24 px (ventana 1920 × 1080); la escala puede ajustarse para pantallas menores. La UI base no hace scroll del mapa: la isla completa está siempre visible.
+El renderizado y la entrada se realizan con una consola libtcod de 160 × 45. La fuente por defecto es monoespaciada Unicode de 12 × 24 px (ventana 1920 × 1080); la escala puede ajustarse para pantallas menores. La UI base no hace scroll del mapa: la isla completa está visible en el modo de mapa completo; el modo foco muestra el FOV/memoria del agente seleccionado.
 
 #### 5.2.1 Mockup conceptual
 
@@ -959,12 +963,14 @@ Las flechas, `PgUp`/`PgDn` e `Inicio`/`Fin` controlan la pestaña activa del pan
 
 | Tecla | Acción |
 |---|---|
-| `V` | Alternar capa de FOV/memoria del agente seleccionado. |
+| `V` | Alternar foco de FOV/memoria del agente seleccionado / mapa completo. |
 | `W` | Alternar capa de clima (lluvia y viento en el MVP; nieve en F2). |
 | `X` | Activar/desactivar cursor de inspección. |
 | Flechas | Mover el cursor de inspección cuando `X` está activo. |
 | `Enter` | Fijar/liberar la inspección de la celda o entidad. |
 | `Esc` | Cerrar cursor/inspección. |
+
+Al seleccionar un agente y activar el foco, el mapa renderiza solo sus celdas visibles y su memoria; `V` vuelve al mapa completo del operador sin alterar la simulación ni los datos del agente.
 
 #### 5.5.3 Vistas a pantalla completa
 
@@ -1192,7 +1198,7 @@ Todas las acciones principales aceptan `tick`, `request_id?` y `reason?` (≤ 28
 | Tool | Argumentos | Descripción |
 |---|---|---|
 | `iasim_move` | `dx`, `dy` | Mueve una celda en 8 direcciones. |
-| `iasim_move_to` | `x`, `y` | Calcula ruta y avanza un paso este tick. |
+| `iasim_move_to` | `x`, `y` | Calcula una ruta determinista con `tcod.path` y avanza un paso este tick. |
 | `iasim_wait` | — | Espera sin moverse. |
 | `iasim_gather` | `x`, `y` o `node_id` | Recolecta un recurso adyacente/visible. |
 | `iasim_pickup` | `x`, `y`, `item_id?` | Recoge un ítem del suelo. |
@@ -1773,7 +1779,7 @@ Objetivo: sandbox de supervivencia observable y testeable.
 | Atributos | Necesidades + capacidades + clima. |
 | Crafteo | Dos niveles, con mesa de trabajo. |
 | Clima | MVP: día/noche, lluvia, tormenta, niebla, viento y temperatura; nieve por tile y estaciones de 7 días en F2. |
-| Percepción | Limitada por FOV + memoria; el operador ve todo. |
+| Percepción | Limitada por FOV + memoria; el operador puede alternar mapa completo y foco del agente. |
 | Acciones MCP | Atómicas + `move_to`; una acción principal por tick. |
 | Agente de prueba | Agente scripted de referencia incluido. |
 | Interacción | Cooperación, competencia, comercio, alianzas y eliminación; los agentes deciden. |
