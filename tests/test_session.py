@@ -85,6 +85,7 @@ class GameSessionTests(unittest.TestCase):
             {action["action"] for action in observation["available_actions"]},
             {
                 "move",
+                "move_to",
                 "wait",
                 "gather",
                 "pickup",
@@ -212,6 +213,21 @@ class GameSessionTests(unittest.TestCase):
         self.assertEqual(observation["last_action_result"]["status"], "success")
         self.assertEqual(session.state.structures[0].kind.value, "fire")
         self.assertEqual(session.state.structures[0].fuel, 99)
+
+    def test_move_to_advances_one_step_per_tick(self) -> None:
+        session = _session()
+        agent_id = _join(session, "Nia")["agent_id"]
+
+        first = session.move_to(agent_id, 0, 4, 2)
+        first_observation = session.observe(agent_id)
+        second = session.move_to(agent_id, 1, 4, 2)
+        second_observation = session.observe(agent_id)
+
+        self.assertTrue(first["ok"])
+        self.assertEqual(first_observation["last_action_result"]["action"], "move_to")
+        self.assertNotEqual(first_observation["agent"]["pos"], [2, 2])
+        self.assertTrue(second["ok"])
+        self.assertEqual(second_observation["agent"]["pos"], [4, 2])
 
     def test_blocked_move_is_reported_in_the_next_observation(self) -> None:
         session = _session(_layout(blocked=Position(3, 2)))

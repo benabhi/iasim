@@ -124,6 +124,14 @@ def create_server(
         return session.move(agent_id, tick, dx, dy)
 
     @server.tool()
+    def iasim_move_to(tick: int, x: int, y: int) -> dict[str, Any]:
+        """Advance one step along a deterministic route to the target."""
+        agent_id = _joined_agent(session)
+        if agent_id is None:
+            return _unauthorized(session)
+        return session.move_to(agent_id, tick, x, y)
+
+    @server.tool()
     def iasim_wait(tick: int) -> dict[str, Any]:
         """Queue a wait action for the current tick."""
         agent_id = _joined_agent(session)

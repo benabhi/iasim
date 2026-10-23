@@ -44,6 +44,7 @@ from iasim.domain.weather import (
 from iasim.errors import PersistenceError
 from iasim.world.generation import generate_layout
 from iasim.world.layout import WorldLayout
+from iasim.world.pathfinding_actions import move_to_resolvers
 from iasim.world.tcod_fov import compute_fov
 
 SCHEMA_VERSION = "1.0"
@@ -132,6 +133,7 @@ class GameSession:
         self._weather_max_ticks = weather_max_ticks
         self._resolvers = {
             **movement_resolvers(),
+            **move_to_resolvers(),
             **item_action_resolvers(self._catalog),
             **crafting_resolvers(self._catalog),
             **construction_resolvers(self._catalog),
@@ -346,6 +348,15 @@ class GameSession:
             tick,
             ActionKind.MOVE,
             (("dx", dx), ("dy", dy)),
+        )
+
+    def move_to(self, agent_id: str, tick: int, x: int, y: int) -> dict[str, Any]:
+        """Queue one step along a deterministic route to a target tile."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.MOVE_TO,
+            (("x", x), ("y", y)),
         )
 
     def wait(self, agent_id: str, tick: int) -> dict[str, Any]:
@@ -801,6 +812,7 @@ class GameSession:
             },
             "available_actions": [
                 {"action": "move", "available": True},
+                {"action": "move_to", "available": True},
                 {"action": "wait", "available": True},
                 {"action": "gather", "available": True},
                 {"action": "pickup", "available": True},

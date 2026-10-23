@@ -12,6 +12,7 @@ class ActionKind(StrEnum):
     """Primary action categories in SRS section 3.2 resolution order."""
 
     MOVE = "move"
+    MOVE_TO = "move_to"
     GATHER = "gather"
     PICKUP = "pickup"
     DROP = "drop"
@@ -36,6 +37,7 @@ class ActionKind(StrEnum):
 # the deterministic resolution order.
 _ACTION_ORDER: dict[ActionKind, int] = {
     ActionKind.MOVE: 0,
+    ActionKind.MOVE_TO: 0,
     ActionKind.GATHER: 1,
     ActionKind.CRAFT: 2,
     ActionKind.BUILD: 3,

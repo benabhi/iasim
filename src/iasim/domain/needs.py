@@ -12,6 +12,7 @@ from iasim.domain.turns import ResolvedAction
 _CENTI = 100
 _ACTIVITY_FACTORS: dict[ActionKind, int] = {
     ActionKind.MOVE: 1000,
+    ActionKind.MOVE_TO: 1000,
     ActionKind.GATHER: 1200,
     ActionKind.PICKUP: 1000,
     ActionKind.DROP: 1000,

@@ -28,6 +28,7 @@ TOOL_NAMES = {
     "iasim_join",
     "iasim_observe",
     "iasim_move",
+    "iasim_move_to",
     "iasim_wait",
     "iasim_gather",
     "iasim_pickup",
