@@ -203,6 +203,19 @@ def create_server(
         return session.craft(agent_id, tick, recipe_id)
 
     @server.tool()
+    def iasim_build(
+        tick: int,
+        structure_id: str,
+        x: int,
+        y: int,
+    ) -> dict[str, Any]:
+        """Build a fire, workbench, or shelter on an adjacent tile."""
+        agent_id = _joined_agent(session)
+        if agent_id is None:
+            return _unauthorized(session)
+        return session.build(agent_id, tick, structure_id, x, y)
+
+    @server.tool()
     def iasim_wait_for_tick(since_tick: int, timeout_ms: int = 1000) -> dict[str, Any]:
         """Wait until a tick newer than since_tick is available."""
         agent_id = _joined_agent(session)

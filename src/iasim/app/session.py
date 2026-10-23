@@ -17,6 +17,7 @@ from typing import Any
 from iasim.crafting import Catalog, load_catalog
 from iasim.domain.actions import Action, ActionKind
 from iasim.domain.agents import Agent, AgentProfile, AgentStatus
+from iasim.domain.construction import advance_fires, construction_resolvers
 from iasim.domain.crafting_actions import crafting_resolvers
 from iasim.domain.geometry import Position
 from iasim.domain.hashing import canonical_state_hash
@@ -133,6 +134,7 @@ class GameSession:
             **movement_resolvers(),
             **item_action_resolvers(self._catalog),
             **crafting_resolvers(self._catalog),
+            **construction_resolvers(self._catalog),
         }
         self._phase = SessionPhase.WAITING
         self._end_reason: SessionEndReason | None = None
@@ -441,6 +443,22 @@ class GameSession:
             (("recipe_id", recipe_id),),
         )
 
+    def build(
+        self,
+        agent_id: str,
+        tick: int,
+        structure_id: str,
+        x: int,
+        y: int,
+    ) -> dict[str, Any]:
+        """Queue construction of one structure on an adjacent tile."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.BUILD,
+            (("structure_id", structure_id), ("x", x), ("y", y)),
+        )
+
     def _queue(
         self,
         agent_id: str,
@@ -688,6 +706,7 @@ class GameSession:
                 "drank",
                 "filled",
                 "crafted",
+                "built",
             }
             self._last_results[event.agent_id] = {
                 "tick": result.tick,
@@ -783,6 +802,7 @@ class GameSession:
                 {"action": "drink", "available": True},
                 {"action": "fill", "available": True},
                 {"action": "craft", "available": True},
+                {"action": "build", "available": True},
             ],
         }
         last_result = self._last_results.get(agent.agent_id)
@@ -810,6 +830,7 @@ class GameSession:
         )
         state = replace(state, weather=weather, rng_state=rng_state)
         state = apply_weather_wetness(state)
+        state = advance_fires(state)
         return apply_needs_tick(
             state,
             resolved_actions,

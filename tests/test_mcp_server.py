@@ -36,6 +36,7 @@ TOOL_NAMES = {
     "iasim_drink",
     "iasim_fill",
     "iasim_craft",
+    "iasim_build",
     "iasim_wait_for_tick",
 }
 

@@ -127,6 +127,8 @@ def _structure_payload(structure: Structure) -> dict[str, Any]:
         "kind": structure.kind.value,
         "x": structure.position.x,
         "y": structure.position.y,
+        "fuel": structure.fuel,
+        "lit": structure.lit,
     }
 
 
