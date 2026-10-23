@@ -331,9 +331,21 @@ class GameSession:
         """Queue one primary wait action for the current tick."""
         return self._queue(agent_id, tick, ActionKind.WAIT)
 
-    def gather(self, agent_id: str, tick: int, x: int, y: int) -> dict[str, Any]:
+    def gather(
+        self,
+        agent_id: str,
+        tick: int,
+        x: int,
+        y: int,
+        node_id: str | None = None,
+    ) -> dict[str, Any]:
         """Queue a gather action on one adjacent resource tile."""
-        return self._queue(agent_id, tick, ActionKind.GATHER, (("x", x), ("y", y)))
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.GATHER,
+            (("x", x), ("y", y), ("node_id", node_id)),
+        )
 
     def pickup(
         self,

@@ -10,7 +10,14 @@ from iasim.domain.actions import Action, ActionKind
 from iasim.domain.agents import Agent
 from iasim.domain.geometry import Position
 from iasim.domain.identifiers import AgentId
-from iasim.domain.items import GroundItem, Inventory, InventoryError, ItemKind, ItemStack
+from iasim.domain.items import (
+    EquipSlot,
+    GroundItem,
+    Inventory,
+    InventoryError,
+    ItemKind,
+    ItemStack,
+)
 from iasim.domain.session import SessionState
 from iasim.domain.turns import ActionResolver, TurnEvent
 
@@ -36,6 +43,8 @@ class ItemActionOutcome(StrEnum):
     OUT_OF_BOUNDS = "out_of_bounds"
     NOT_IN_RANGE = "not_in_range"
     NO_RESOURCE = "no_resource"
+    UNKNOWN_RESOURCE = "unknown_resource"
+    TOOL_REQUIRED = "tool_required"
     INVENTORY_FULL = "inventory_full"
     NO_ITEM = "no_item"
     AMBIGUOUS_ITEM = "ambiguous_item"
@@ -85,8 +94,14 @@ def resolve_gather(
     action: Action,
     catalog: Catalog,
 ) -> tuple[SessionState, tuple[TurnEvent, ...]]:
-    """Gather the first catalog resource attached to an adjacent tile."""
-    target = _target_from_payload(action.payload_dict())
+    """Gather a manual or tool-gated resource from an adjacent tile.
+
+    ``node_id`` selects a catalog resource id on the target tile. Without it,
+    the first manual resource is selected, falling back to the first catalog
+    resource when every option requires a tool.
+    """
+    payload = action.payload_dict()
+    target = _target_from_payload(payload)
     if target is None:
         return state, (_event(action, ItemActionOutcome.INVALID_TARGET),)
     if not state.world.contains(target):
@@ -97,10 +112,31 @@ def resolve_gather(
     if not _is_interactable(agent.position, target):
         return state, (_event(action, ItemActionOutcome.NOT_IN_RANGE),)
 
+    node_id = payload.get("node_id")
+    if node_id is not None and (not isinstance(node_id, str) or not node_id):
+        return state, (_event(action, ItemActionOutcome.INVALID_TARGET),)
+
     resources = catalog.resources_for_tile(state.world.tile_at(target))
     if not resources:
         return state, (_event(action, ItemActionOutcome.NO_RESOURCE),)
-    resource = resources[0]
+    if node_id is not None:
+        resource = next(
+            (candidate for candidate in resources if candidate.resource_id == node_id),
+            None,
+        )
+        if resource is None:
+            return state, (_event(action, ItemActionOutcome.UNKNOWN_RESOURCE),)
+    else:
+        resource = next(
+            (candidate for candidate in resources if candidate.required_tool is None),
+            resources[0],
+        )
+
+    if resource.required_tool is not None:
+        tool = agent.equipment.item(EquipSlot.HAND)
+        if tool is None or tool.item_id != resource.required_tool:
+            return state, (_event(action, ItemActionOutcome.TOOL_REQUIRED),)
+
     spec = catalog.item(str(resource.item_id))
     try:
         inventory = agent.inventory.add_quantity(spec.definition, resource.quantity)

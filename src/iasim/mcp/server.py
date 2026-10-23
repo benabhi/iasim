@@ -132,12 +132,17 @@ def create_server(
         return session.wait(agent_id, tick)
 
     @server.tool()
-    def iasim_gather(tick: int, x: int, y: int) -> dict[str, Any]:
-        """Gather a resource from an adjacent tile."""
+    def iasim_gather(
+        tick: int,
+        x: int,
+        y: int,
+        node_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Gather a manual or tool-gated resource from an adjacent tile."""
         agent_id = _joined_agent(session)
         if agent_id is None:
             return _unauthorized(session)
-        return session.gather(agent_id, tick, x, y)
+        return session.gather(agent_id, tick, x, y, node_id)
 
     @server.tool()
     def iasim_pickup(

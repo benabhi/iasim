@@ -20,7 +20,9 @@ def _world() -> WorldMap:
     width = 7
     height = 7
     tiles = [TileType.GRASS] * (width * height)
+    tiles[2 * width + 1] = TileType.TREE
     tiles[2 * width + 3] = TileType.BUSH
+    tiles[3 * width + 2] = TileType.ROCK
     tiles[3 * width + 3] = TileType.FRESH_WATER
     return WorldMap(width=width, height=height, tiles=tuple(tiles))
 
@@ -81,6 +83,102 @@ class GatherTests(unittest.TestCase):
         self.assertEqual(outcome, ItemActionOutcome.GATHERED.value)
         self.assertEqual(state.agents[0].inventory.stack_for("berry").quantity, 2)
 
+    def test_gather_uses_manual_tree_branches_by_default(self) -> None:
+        state, outcome = _resolve(
+            _state(_agent()),
+            Action(
+                AgentId("ag_01"),
+                0,
+                ActionKind.GATHER,
+                (("x", 1), ("y", 2)),
+            ),
+        )
+
+        self.assertEqual(outcome, ItemActionOutcome.GATHERED.value)
+        self.assertEqual(state.agents[0].inventory.stack_for("wood").quantity, 1)
+
+    def test_gather_logs_require_an_equipped_axe(self) -> None:
+        rejected_state, rejected = _resolve(
+            _state(_agent()),
+            Action(
+                AgentId("ag_01"),
+                0,
+                ActionKind.GATHER,
+                (("x", 1), ("y", 2), ("node_id", "tree_logs")),
+            ),
+        )
+        self.assertEqual(rejected, ItemActionOutcome.TOOL_REQUIRED.value)
+        self.assertTrue(rejected_state.agents[0].inventory.is_empty)
+
+        inventory_only_state, inventory_only = _resolve(
+            _state(_agent("stone_axe")),
+            Action(
+                AgentId("ag_01"),
+                0,
+                ActionKind.GATHER,
+                (("x", 1), ("y", 2), ("node_id", "tree_logs")),
+            ),
+        )
+        self.assertEqual(inventory_only, ItemActionOutcome.TOOL_REQUIRED.value)
+        self.assertIsNone(inventory_only_state.agents[0].inventory.stack_for("wood"))
+
+        catalog = load_catalog()
+        equipped = _agent("stone_axe").equip(catalog.item("stone_axe"))
+        state, outcome = _resolve(
+            _state(equipped),
+            Action(
+                AgentId("ag_01"),
+                0,
+                ActionKind.GATHER,
+                (("x", 1), ("y", 2), ("node_id", "tree_logs")),
+            ),
+        )
+
+        self.assertEqual(outcome, ItemActionOutcome.GATHERED.value)
+        self.assertEqual(state.agents[0].inventory.stack_for("wood").quantity, 3)
+
+    def test_gather_rocks_require_an_equipped_pick(self) -> None:
+        rejected_state, rejected = _resolve(
+            _state(_agent()),
+            Action(
+                AgentId("ag_01"),
+                0,
+                ActionKind.GATHER,
+                (("x", 2), ("y", 3)),
+            ),
+        )
+        self.assertEqual(rejected, ItemActionOutcome.TOOL_REQUIRED.value)
+        self.assertTrue(rejected_state.agents[0].inventory.is_empty)
+
+        catalog = load_catalog()
+        equipped = _agent("stone_pick").equip(catalog.item("stone_pick"))
+        state, outcome = _resolve(
+            _state(equipped),
+            Action(
+                AgentId("ag_01"),
+                0,
+                ActionKind.GATHER,
+                (("x", 2), ("y", 3)),
+            ),
+        )
+
+        self.assertEqual(outcome, ItemActionOutcome.GATHERED.value)
+        self.assertEqual(state.agents[0].inventory.stack_for("stone").quantity, 3)
+
+    def test_gather_rejects_an_unknown_resource_node(self) -> None:
+        state, outcome = _resolve(
+            _state(_agent()),
+            Action(
+                AgentId("ag_01"),
+                0,
+                ActionKind.GATHER,
+                (("x", 1), ("y", 2), ("node_id", "bush_berries")),
+            ),
+        )
+
+        self.assertEqual(outcome, ItemActionOutcome.UNKNOWN_RESOURCE.value)
+        self.assertTrue(state.agents[0].inventory.is_empty)
+
     def test_gather_rejects_out_of_range_without_changing_state(self) -> None:
         state, outcome = _resolve(
             _state(_agent()),
@@ -102,7 +200,7 @@ class GatherTests(unittest.TestCase):
                 AgentId("ag_01"),
                 0,
                 ActionKind.GATHER,
-                (("x", 2), ("y", 3)),
+                (("x", 1), ("y", 3)),
             ),
         )
 
