@@ -20,7 +20,6 @@ from iasim.domain.agents import Agent, AgentProfile, AgentStatus
 from iasim.domain.climate import apply_climate_tick, effective_vision
 from iasim.domain.construction import advance_fires, construction_resolvers
 from iasim.domain.crafting_actions import crafting_resolvers
-from iasim.domain.geometry import Position
 from iasim.domain.hashing import canonical_state_hash
 from iasim.domain.identifiers import AgentId
 from iasim.domain.item_actions import item_action_resolvers
@@ -45,9 +44,9 @@ from iasim.domain.weather import (
 from iasim.errors import PersistenceError
 from iasim.world.generation import generate_layout
 from iasim.world.layout import WorldLayout
+from iasim.world.tcod_fov import compute_fov
 
 SCHEMA_VERSION = "1.0"
-PERCEPTION_RADIUS = 3
 MAX_NAME_LENGTH = 40
 DEFAULT_TURN_TIMEOUT_MS = 60_000
 MAX_AGENTS = 8
@@ -720,19 +719,26 @@ class GameSession:
         clock = self._engine.clock
         attributes = agent.attributes
         inventory = agent.inventory
+        vision_radius = effective_vision(
+            agent,
+            clock,
+            self._state.weather,
+            self._state.structures,
+        )
+        visible_positions = compute_fov(
+            self._state.world,
+            agent.position,
+            vision_radius,
+        )
         visible = [
             {
-                "x": x,
-                "y": y,
-                "tile": self._state.world.tile_at(Position(x, y)).value,
+                "x": position.x,
+                "y": position.y,
+                "tile": self._state.world.tile_at(position).value,
             }
-            for y in range(
-                max(0, agent.position.y - PERCEPTION_RADIUS),
-                min(self._state.world.height, agent.position.y + PERCEPTION_RADIUS + 1),
-            )
-            for x in range(
-                max(0, agent.position.x - PERCEPTION_RADIUS),
-                min(self._state.world.width, agent.position.x + PERCEPTION_RADIUS + 1),
+            for position in sorted(
+                visible_positions,
+                key=lambda position: (position.y, position.x),
             )
         ]
         observation: dict[str, Any] = {
@@ -762,12 +768,7 @@ class GameSession:
                 "strength": attributes.strength,
                 "dexterity": attributes.dexterity,
                 "endurance": attributes.endurance,
-                "effective_vision": effective_vision(
-                    agent,
-                    clock,
-                    self._state.weather,
-                    self._state.structures,
-                ),
+                "effective_vision": vision_radius,
                 "carry_kg": inventory.total_weight_grams / 1000.0,
                 "carry_capacity_kg": agent.carry_capacity_grams / 1000.0,
                 "equipment": {slot.value: spec.item_id for slot, spec in agent.equipment.items},

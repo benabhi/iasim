@@ -10,6 +10,7 @@ requires-python = ">=3.12"
 dependencies = [
     "mcp>=2.3,<3",
     "pydantic>=2.9,<3",
+    "tcod==21.2.2",
 ]
 
 [project.scripts]

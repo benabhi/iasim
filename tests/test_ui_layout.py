@@ -9,7 +9,7 @@ from iasim.domain.agents import Agent
 from iasim.domain.geometry import Position
 from iasim.domain.identifiers import AgentId
 from iasim.domain.session import SessionState
-from iasim.domain.tiles import TileType
+from iasim.domain.tiles import TileType, WorldMap
 from iasim.ui import theme
 from iasim.ui.layout import render_base_screen, render_help_screen
 from iasim.world.generation import generate_layout
@@ -110,6 +110,33 @@ class BaseLayoutTests(unittest.TestCase):
         self.assertEqual(first.to_text(), second.to_text())
         self.assertEqual(_hash(first), GOLDEN_HASH)
         self.assertEqual(_hash(second), GOLDEN_HASH)
+
+    def test_focus_mode_hides_tiles_and_agents_behind_a_blocker(self) -> None:
+        tiles = [TileType.GRASS] * 100
+        tiles[5 * 10 + 5] = TileType.TREE
+        state = SessionState(
+            seed=42,
+            tick=0,
+            rng_state=42,
+            world=WorldMap(width=10, height=10, tiles=tuple(tiles)),
+            agents=(
+                Agent(AgentId("ag_01"), Position(4, 5)),
+                Agent(AgentId("ag_02"), Position(6, 5)),
+            ),
+        )
+        screen = render_base_screen(
+            state,
+            NAMES,
+            selected_agent_id=AgentId("ag_01"),
+            focus_mode=True,
+        )
+
+        self.assertEqual(screen.cell_at(4, 5).char, "@")
+        self.assertEqual(
+            screen.cell_at(5, 5).char,
+            theme.tile_glyph(TileType.TREE),
+        )
+        self.assertEqual(screen.cell_at(6, 5).char, " ")
 
     def test_theme_covers_every_tile_type(self) -> None:
         self.assertEqual(set(theme.TILE_GLYPHS), set(TileType))

@@ -49,6 +49,8 @@ class TileType(StrEnum):
             TileType.TREE,
             TileType.PALM,
             TileType.ROCK,
+            TileType.WORKBENCH,
+            TileType.FIRE,
         }
 
     @property

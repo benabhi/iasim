@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from iasim.domain.agents import Agent, AgentStatus
+from iasim.domain.climate import effective_vision
 from iasim.domain.clock import DayPhase, SimulationClock
 from iasim.domain.geometry import Position
 from iasim.domain.identifiers import AgentId
@@ -15,6 +16,7 @@ from iasim.domain.tiles import TileType
 from iasim.domain.world import StructureKind
 from iasim.ui import theme
 from iasim.ui.controls import KEY_GUIDE, STATUS_GUIDE
+from iasim.world.tcod_fov import compute_fov
 
 SCREEN_WIDTH = 160
 SCREEN_HEIGHT = 45
@@ -171,11 +173,12 @@ def render_base_screen(
     speed: int = 1,
     capacity: int = 8,
     ascii_mode: bool = False,
+    focus_mode: bool = False,
 ) -> BaseScreen:
     """Render the deterministic base screen without mutating the session."""
     canvas = _Canvas()
     canvas.fill(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, fg=theme.WHITE, bg=theme.BLACK)
-    _render_map(canvas, state, selected_agent_id, ascii_mode)
+    _render_map(canvas, state, selected_agent_id, ascii_mode, focus_mode=focus_mode)
     _render_ticker(canvas, events, ascii_mode)
     _render_panel(
         canvas,
@@ -269,12 +272,31 @@ def _render_map(
     state: SessionState,
     selected_agent_id: AgentId | None,
     ascii_mode: bool,
+    *,
+    focus_mode: bool = False,
 ) -> None:
+    selected = _resolve_selected(state, selected_agent_id)
+    visible_positions: frozenset[Position] | None = None
+    if focus_mode and selected is not None:
+        clock = SimulationClock(state.tick_minutes)
+        clock.advance(state.tick)
+        radius = effective_vision(
+            selected,
+            clock,
+            state.weather,
+            state.structures,
+        )
+        visible_positions = compute_fov(state.world, selected.position, radius)
+
     for y in range(MAP_HEIGHT):
         for x in range(MAP_WIDTH):
             if x >= state.world.width or y >= state.world.height:
                 continue
-            tile = state.world.tile_at(Position(x, y))
+            position = Position(x, y)
+            if visible_positions is not None and position not in visible_positions:
+                canvas.put(x, y, " ", fg=theme.BLACK, bg=theme.BLACK)
+                continue
+            tile = state.world.tile_at(position)
             canvas.put(
                 x,
                 y,
@@ -286,15 +308,17 @@ def _render_map(
     for agent in state.agents:
         if not (0 <= agent.position.x < MAP_WIDTH and 0 <= agent.position.y < MAP_HEIGHT):
             continue
-        selected = agent.agent_id == selected_agent_id
+        if visible_positions is not None and agent.position not in visible_positions:
+            continue
+        is_selected = agent.agent_id == selected_agent_id
         tile = state.world.tile_at(agent.position)
         canvas.put(
             agent.position.x,
             agent.position.y,
             _agent_glyph(agent, ascii_mode),
             fg=theme.AGENT_COLOR,
-            bg=theme.SELECTED_BG if selected else theme.TILE_BACKGROUNDS[tile],
-            bold=selected,
+            bg=theme.SELECTED_BG if is_selected else theme.TILE_BACKGROUNDS[tile],
+            bold=is_selected,
         )
 
 

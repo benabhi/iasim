@@ -23,6 +23,7 @@ KEY_GUIDE: tuple[tuple[str, str], ...] = (
     ("+ / -", "Cambiar velocidad"),
     ("F1", "Abrir / cerrar ayuda"),
     ("A", "Alternar ASCII"),
+    ("V", "Alternar foco FOV / mapa completo"),
     ("Q", "Salir (confirmar)"),
     ("R", "Reiniciar (confirmar)"),
     ("ESC", "Cancelar / cerrar ayuda"),
@@ -55,6 +56,7 @@ class UiState:
     speed: int = 1
     help_open: bool = False
     ascii_mode: bool = False
+    focus_mode: bool = False
     pending_confirmation: UiCommand | None = None
     quit_requested: bool = False
     restart_requested: bool = False
@@ -105,6 +107,9 @@ def handle_key(
 
     if normalized == "a":
         return replace(state, ascii_mode=not state.ascii_mode)
+
+    if normalized == "v":
+        return replace(state, focus_mode=not state.focus_mode)
 
     if normalized == "q":
         return replace(state, pending_confirmation=UiCommand.QUIT)
