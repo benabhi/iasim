@@ -12,6 +12,7 @@ from pathlib import Path
 import uvicorn
 
 from iasim.app.session import GameSession
+from iasim.domain.geometry import Position
 from iasim.domain.identifiers import AgentId
 from iasim.mcp.server import create_app
 from iasim.reference_agent.smoke import run_smoke_agent
@@ -51,10 +52,14 @@ class SmokeAgentTests(unittest.TestCase):
             self.assertEqual(len(positions), 21)
             self.assertGreater(len(set(positions)), 1)
             self.assertGreaterEqual(session.state.tick, 20)
-            self.assertEqual(len(session.state.agents), 1)
-            self.assertEqual(session.state.agents[0].position, positions[-1])
+            # The smoke agent closed its transport, so it left the world and
+            # freed its slot; no ghost agent remains.
+            self.assertEqual(session.state.agents, ())
 
-            agent_id = session.state.agents[0].agent_id
+            rejoined = session.join("Smoke", token)
+            self.assertTrue(rejoined["ok"])
+            agent_id = rejoined["agent_id"]
+            spawn = Position(int(rejoined["spawn"][0]), int(rejoined["spawn"][1]))
             session.report_usage(
                 agent_id,
                 session.tick,
@@ -71,11 +76,10 @@ class SmokeAgentTests(unittest.TestCase):
                 selected_agent_id=AgentId(agent_id),
                 usage=session.usage_snapshot(),
             )
-            last = positions[-1]
-            self.assertEqual(screen.cell_at(last.x, last.y).char, "@")
+            self.assertEqual(screen.cell_at(spawn.x, spawn.y).char, "@")
             panel = "\n".join(screen.row_text(y)[80:] for y in range(45))
             self.assertIn("Smoke", panel)
-            self.assertIn(f"({last.x}, {last.y})", panel)
+            self.assertIn(f"({spawn.x}, {spawn.y})", panel)
             self.assertIn("USO IA (REPORTADO)", panel)
             self.assertIn("smoke-model / low", panel)
 

@@ -222,9 +222,13 @@ Los adaptadores `tcod` son la única frontera con la librería nativa: reciben e
 Reglas adicionales:
 
 - El servidor y la isla existen desde el arranque, sin lobby ni cuenta regresiva. Los agentes se conectan y desconectan durante la vida del servidor; el máximo de agentes concurrentes es configurable (1–8).
-- Un agente existe en el mundo solo mientras su conexión MCP está abierta. Al desconectarse, se retira del mundo, se cancela su acción pendiente y su inventario cae al suelo en su posición. El slot y su token quedan libres para una conexión nueva; no se reanuda el estado del agente anterior.
+- Un agente existe en el mundo solo mientras su conexión MCP está abierta. La conexión se considera cerrada cuando el cliente termina la sesión MCP (un `DELETE` autenticado); una pérdida abrupta sin `DELETE` queda cubierta por el tiempo de inactividad del transporte. Al desconectarse, se retira del mundo, se cancela su acción pendiente y su inventario cae al suelo en su posición. El slot y su token quedan libres para una conexión nueva; no se reanuda el estado del agente anterior.
 - La muerte es permanente y deja un cadáver saqueable. Un agente muerto deja de actuar aunque su conexión siga abierta; si luego se desconecta, el cadáver permanece hasta que el operador finalice la sesión.
 - Un agente que no responde pierde el turno (`skip`). Tras **3 timeouts consecutivos** pasa a estado `ausente` mientras siga conectado: no bloquea el turno, pero puede ser atacado o saqueado. Si la conexión se cierra, se aplica la regla de desconexión.
+  - El plazo del tick (`turn_timeout_ms`) empieza a contar con la primera acción recibida del tick; sin acciones pendientes no corre ningún plazo.
+  - Cuando el plazo vence, el tick se resuelve solo con las acciones recibidas y cada agente activo sin acción suma un timeout consecutivo.
+  - Un agente `ausente` vuelve a `activo` en cuanto envía una solicitud válida (observación, consulta o reporte) y puede actuar en el tick siguiente; actuar reinicia su contador de timeouts.
+  - El umbral de timeouts consecutivos es configurable (`timeout_disconnects`).
 - Si no hay agentes conectados (o ningún agente activo), la simulación se pausa y la GUI muestra `ESPERANDO AGENTES`. El servidor y la GUI siguen abiertos para nuevas conexiones.
 - Un agente puede conectarse en cualquier momento entre ticks; el servidor lo incorpora al siguiente tick con un punto de aparición libre. No hay restricciones de incorporación tardía por lobby.
 - Un agente que duerme (`sleep`) no bloquea el turno: el servidor lo considera en espera automática hasta que despierte o sea interrumpido.
@@ -1346,6 +1350,7 @@ Campos obligatorios:
 - `schema_version`, `tick`, `session`, `server_time_ms`, `deadline_ms`.
 - `session.phase` es `waiting`, `running` o `finished`; incluye `max_agents`, `joined_agents` y `alive_agents`, `waiting_reason` si está esperando (`no_agents`, `no_active_agents` o `last_death`) y `end_reason` si terminó.
 - `time`, `agent`, `environment`.
+- `agent.state` es `active`, `absent`, `sleeping` o `dead`; refleja la participación del agente en el turno.
 - `perception.visible`, `perception.memory_updates`, `perception.agents`, `perception.messages`.
 - `inventory` y `available_actions`.
 - `social` con las alianzas activas del agente y las ofertas pendientes que lo involucran (`alliance_id`, `from`, `to`, `tick`, `mine`); la relación de un agente visible es `ally` solo si la alianza está aceptada.
