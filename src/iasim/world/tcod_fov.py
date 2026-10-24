@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 import numpy as np
 import tcod
 
@@ -9,6 +11,18 @@ from iasim.domain.geometry import Position
 from iasim.domain.tiles import WorldMap
 
 FOV_ALGORITHM = tcod.constants.FOV_RESTRICTIVE
+
+
+@lru_cache(maxsize=8)
+def _transparency(world: WorldMap) -> np.ndarray:
+    """Return the cached [x, y] transparency array for an immutable world."""
+    return np.asarray(
+        [
+            [world.tile_at(Position(x, y)).transparent for y in range(world.height)]
+            for x in range(world.width)
+        ],
+        dtype=bool,
+    )
 
 
 def compute_fov(
@@ -29,15 +43,8 @@ def compute_fov(
         return frozenset({origin})
 
     # python-tcod map arrays are indexed by [x, y], unlike row-major consoles.
-    transparency = np.asarray(
-        [
-            [world.tile_at(Position(x, y)).transparent for y in range(world.height)]
-            for x in range(world.width)
-        ],
-        dtype=bool,
-    )
     visibility = tcod.map.compute_fov(
-        transparency,
+        _transparency(world),
         (origin.x, origin.y),
         radius=radius,
         light_walls=True,

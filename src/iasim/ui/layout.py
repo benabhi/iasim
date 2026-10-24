@@ -176,7 +176,8 @@ class BaseScreen:
 
 class _Canvas:
     def __init__(self) -> None:
-        self._cells = [[Cell() for _ in range(SCREEN_WIDTH)] for _ in range(SCREEN_HEIGHT)]
+        blank = Cell()
+        self._cells = [[blank] * SCREEN_WIDTH for _ in range(SCREEN_HEIGHT)]
 
     def put(
         self,
@@ -205,9 +206,14 @@ class _Canvas:
         fg: theme.RGB = theme.WHITE,
         bg: theme.RGB = theme.BLACK,
     ) -> None:
+        if x <= 0 and y <= 0 and width >= SCREEN_WIDTH and height >= SCREEN_HEIGHT:
+            blank = Cell(" ", fg, bg)
+            self._cells = [[blank] * SCREEN_WIDTH for _ in range(SCREEN_HEIGHT)]
+            return
+        cell = Cell(" ", fg, bg)
         for py in range(max(0, y), min(SCREEN_HEIGHT, y + height)):
             for px in range(max(0, x), min(SCREEN_WIDTH, x + width)):
-                self._cells[py][px] = Cell(" ", fg, bg)
+                self._cells[py][px] = cell
 
     def hline(self, x: int, y: int, width: int, char: str = "─") -> None:
         self.put(x, y, char * width, fg=theme.DIM)
