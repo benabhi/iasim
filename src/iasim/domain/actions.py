@@ -21,6 +21,8 @@ class ActionKind(StrEnum):
     FILL = "fill"
     CRAFT = "craft"
     BUILD = "build"
+    EQUIP = "equip"
+    UNEQUIP = "unequip"
     USE_ITEM = "use_item"
     OFFER_TRADE = "offer_trade"
     ACCEPT_TRADE = "accept_trade"
@@ -58,6 +60,8 @@ _ACTION_ORDER: dict[ActionKind, int] = {
     ActionKind.DRINK: 4,
     ActionKind.FILL: 4,
     ActionKind.USE_ITEM: 4,
+    ActionKind.EQUIP: 4,
+    ActionKind.UNEQUIP: 4,
     ActionKind.LOOT: 4,
     ActionKind.OFFER_TRADE: 5,
     ActionKind.ACCEPT_TRADE: 5,

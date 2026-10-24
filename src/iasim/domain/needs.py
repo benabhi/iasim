@@ -22,6 +22,8 @@ _ACTIVITY_FACTORS: dict[ActionKind, int] = {
     ActionKind.CRAFT: 1200,
     ActionKind.BUILD: 1200,
     ActionKind.USE_ITEM: 1200,
+    ActionKind.EQUIP: 1000,
+    ActionKind.UNEQUIP: 500,
     ActionKind.LOOT: 1000,
     ActionKind.OFFER_TRADE: 1200,
     ActionKind.ACCEPT_TRADE: 1200,

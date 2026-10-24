@@ -1196,7 +1196,7 @@ El reporte es **voluntario, no verificado y potencialmente engañoso**. La UI lo
 | `iasim_get_recipes` | — | Libre | Recetas conocidas, requisitos y estaciones. |
 | `iasim_get_inventory` | — | Libre | Inventario, equipo, peso y slots. |
 | `iasim_inspect` | `target_id` o `x,y` | Libre | Detalle de una entidad visible. |
-| `iasim_get_session_info` | — | Libre | Seed, día, tick, versión, estado de pausa y agentes. |
+| `iasim_get_session_info` | — | Libre | Día, tick, versión del protocolo, estado de pausa y agentes. Nunca la seed ni el RNG, que el agente no puede conocer (RF-1012). |
 | `iasim_report_mind` | `tick`, `intent`, `thought`, `plan?`, `confidence?` | Libre, 1/tick | Reporta intención/pensamiento para el operador. |
 | `iasim_report_usage` | `tick`, `input_tokens`, `output_tokens`, `model`, `reasoning_effort?`, `cost_usd?` | Libre, acumulativo | Reporta uso de IA para el operador; no consume acción ni altera la simulación. |
 | `iasim_leave` | — | — | Cierra la sesión del agente; no lo mata. |

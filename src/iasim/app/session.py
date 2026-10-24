@@ -459,6 +459,188 @@ class GameSession:
                 return self._error("NOT_YOUR_TURN", "agent is not joined")
             return self._observation(agent)
 
+    def recipes(self) -> dict[str, Any]:
+        """Return every known crafting recipe with its requirements."""
+        with self._lock:
+            recipes = [
+                {
+                    "recipe_id": recipe.recipe_id,
+                    "level": recipe.level,
+                    "station": recipe.station.value if recipe.station is not None else None,
+                    "ingredients": [
+                        {"item_id": item_id, "qty": quantity}
+                        for item_id, quantity in recipe.ingredients
+                    ],
+                    "output": recipe.output,
+                    "output_quantity": recipe.output_quantity,
+                }
+                for recipe in sorted(
+                    self._catalog.recipes.values(),
+                    key=lambda candidate: candidate.recipe_id,
+                )
+            ]
+            return {
+                "ok": True,
+                "schema_version": SCHEMA_VERSION,
+                "tick": self._state.tick,
+                "recipes": recipes,
+            }
+
+    def inventory_for(self, agent_id: str) -> dict[str, Any]:
+        """Return the inventory, equipment, and capacity of a joined agent."""
+        with self._lock:
+            target = AgentId(agent_id)
+            agent = self._find_agent(agent_id)
+            if target not in self._names or agent is None:
+                return self._error("NOT_YOUR_TURN", "agent is not joined")
+            return {
+                "ok": True,
+                "schema_version": SCHEMA_VERSION,
+                "tick": self._state.tick,
+                "inventory": self._inventory_payload(agent),
+                "equipment": self._equipment_payload(agent),
+                "carry_kg": agent.inventory.total_weight_grams / 1000.0,
+                "carry_capacity_kg": agent.carry_capacity_grams / 1000.0,
+            }
+
+    def info(self, agent_id: str) -> dict[str, Any]:
+        """Return non-secret session information for a joined agent.
+
+        The seed and the RNG state are never exposed to agents: with the seed an
+        agent could predict initiative, hit chances, and weather.
+        """
+        with self._lock:
+            target = AgentId(agent_id)
+            agent = self._find_agent(agent_id)
+            if target not in self._names or agent is None:
+                return self._error("NOT_YOUR_TURN", "agent is not joined")
+            clock = self._engine.clock
+            return {
+                "ok": True,
+                "schema_version": SCHEMA_VERSION,
+                "tick": self._state.tick,
+                "time": {
+                    "day": clock.day,
+                    "hour": clock.hour,
+                    "minute": clock.minute,
+                    "phase": clock.phase.value,
+                },
+                "session": self._session_info_locked(),
+                "tick_minutes": self._state.tick_minutes,
+                "agents": [
+                    {
+                        "id": str(other.agent_id),
+                        "name": self._names.get(other.agent_id, ""),
+                        "alive": other.is_alive,
+                        "status": other.status.value,
+                    }
+                    for other in sorted(self._state.agents, key=lambda item: item.agent_id)
+                ],
+            }
+
+    def inspect(
+        self,
+        agent_id: str,
+        target_id: str | None = None,
+        x: int | None = None,
+        y: int | None = None,
+    ) -> dict[str, Any]:
+        """Return details of one agent, corpse, or tile within perception."""
+        with self._lock:
+            target = AgentId(agent_id)
+            agent = self._find_agent(agent_id)
+            if target not in self._names or agent is None:
+                return self._error("NOT_YOUR_TURN", "agent is not joined")
+            has_position = x is not None or y is not None
+            if target_id is not None and has_position:
+                return self._error(
+                    "INVALID_TARGET",
+                    "provide either target_id or x,y, not both",
+                )
+            if target_id is None and (x is None or y is None):
+                return self._error("INVALID_TARGET", "provide target_id or both x and y")
+
+            perception = self._observation(agent)["perception"]
+            if target_id is not None:
+                entry = self._visible_agent(perception, target_id)
+                if entry is None:
+                    entry = self._visible_corpse(perception, target_id)
+                if entry is None:
+                    return self._error("NOT_VISIBLE", "target is not within perception")
+            else:
+                if type(x) is not int or type(y) is not int:
+                    return self._error("INVALID_TARGET", "x and y must be integers")
+                if not self._state.world.contains(Position(x, y)):
+                    return self._error("INVALID_TARGET", "position is outside the world")
+                entry = self._visible_tile(perception, x, y)
+                if entry is None:
+                    return self._error("NOT_VISIBLE", "tile is not within perception")
+
+            return {
+                "ok": True,
+                "schema_version": SCHEMA_VERSION,
+                "tick": self._state.tick,
+                "target": entry,
+            }
+
+    def _visible_agent(
+        self,
+        perception: Mapping[str, Any],
+        target_id: str,
+    ) -> dict[str, Any] | None:
+        for entry in perception["agents"]:
+            if entry["id"] == target_id:
+                return {"kind": "agent", **entry}
+        return None
+
+    def _visible_corpse(
+        self,
+        perception: Mapping[str, Any],
+        target_id: str,
+    ) -> dict[str, Any] | None:
+        for tile in perception["visible"]:
+            for entity in tile["entities"]:
+                if entity.get("type") == "corpse" and entity.get("corpse_id") == target_id:
+                    return {
+                        "kind": "corpse",
+                        "x": tile["x"],
+                        "y": tile["y"],
+                        **entity,
+                    }
+        return None
+
+    def _visible_tile(
+        self,
+        perception: Mapping[str, Any],
+        x: int,
+        y: int,
+    ) -> dict[str, Any] | None:
+        for tile in perception["visible"]:
+            if tile["x"] == x and tile["y"] == y:
+                return {"kind": "tile", **tile}
+        return None
+
+    def _inventory_payload(self, agent: Agent) -> dict[str, Any]:
+        inventory = agent.inventory
+        return {
+            "weight_kg": inventory.total_weight_grams / 1000.0,
+            "slots_used": len(inventory.stacks),
+            "slots_total": inventory.max_slots,
+            "items": [
+                {
+                    "item_id": stack.definition.item_id,
+                    "qty": stack.quantity,
+                    "charges": stack.charges,
+                    "weight_kg": stack.total_weight_grams / 1000.0,
+                }
+                for stack in inventory.stacks
+            ],
+        }
+
+    @staticmethod
+    def _equipment_payload(agent: Agent) -> dict[str, str]:
+        return {slot.value: spec.item_id for slot, spec in agent.equipment.items}
+
     def report_usage(
         self,
         agent_id: str,
@@ -924,6 +1106,24 @@ class GameSession:
             (("item_id", item_id),),
         )
 
+    def equip(self, agent_id: str, tick: int, item_id: str) -> dict[str, Any]:
+        """Queue equipping one inventory item into its declared slot."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.EQUIP,
+            (("item_id", item_id),),
+        )
+
+    def unequip(self, agent_id: str, tick: int, slot: str) -> dict[str, Any]:
+        """Queue moving one equipped item back into the inventory."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.UNEQUIP,
+            (("slot", slot),),
+        )
+
     def build(
         self,
         agent_id: str,
@@ -1316,6 +1516,8 @@ class GameSession:
                 "filled",
                 "crafted",
                 "built",
+                "equipped",
+                "unequipped",
                 "rested",
                 "sleeping",
                 "offered",
@@ -1455,7 +1657,7 @@ class GameSession:
                 "effective_vision": vision_radius,
                 "carry_kg": inventory.total_weight_grams / 1000.0,
                 "carry_capacity_kg": agent.carry_capacity_grams / 1000.0,
-                "equipment": {slot.value: spec.item_id for slot, spec in agent.equipment.items},
+                "equipment": self._equipment_payload(agent),
             },
             "environment": {
                 "weather": self._state.weather.kind.value,
@@ -1503,20 +1705,7 @@ class GameSession:
                     )
                 ],
             },
-            "inventory": {
-                "weight_kg": inventory.total_weight_grams / 1000.0,
-                "slots_used": len(inventory.stacks),
-                "slots_total": inventory.max_slots,
-                "items": [
-                    {
-                        "item_id": stack.definition.item_id,
-                        "qty": stack.quantity,
-                        "charges": stack.charges,
-                        "weight_kg": stack.total_weight_grams / 1000.0,
-                    }
-                    for stack in inventory.stacks
-                ],
-            },
+            "inventory": self._inventory_payload(agent),
             "social": {
                 "alliances": [
                     {
@@ -1561,6 +1750,8 @@ class GameSession:
                 {"action": "craft", "available": True},
                 {"action": "build", "available": True},
                 {"action": "use", "available": True},
+                {"action": "equip", "available": True},
+                {"action": "unequip", "available": True},
                 {"action": "attack", "available": True},
                 {"action": "throw", "available": True},
                 {"action": "flee", "available": True},

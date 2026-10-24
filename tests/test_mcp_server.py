@@ -21,12 +21,18 @@ from starlette.requests import Request
 from iasim.app.session import GameSession
 from iasim.domain.geometry import Position
 from iasim.domain.tiles import TileType, WorldMap
+from iasim.mcp.protocol import PROTOCOL_VERSION
 from iasim.mcp.server import LAN_WARNING, create_app, create_server, server_connection_info
 from iasim.world.layout import WorldLayout
 
 TOOL_NAMES = {
     "iasim_join",
+    "iasim_leave",
     "iasim_observe",
+    "iasim_get_session_info",
+    "iasim_get_recipes",
+    "iasim_get_inventory",
+    "iasim_inspect",
     "iasim_move",
     "iasim_move_to",
     "iasim_wait",
@@ -39,6 +45,8 @@ TOOL_NAMES = {
     "iasim_drink",
     "iasim_fill",
     "iasim_use",
+    "iasim_equip",
+    "iasim_unequip",
     "iasim_craft",
     "iasim_build",
     "iasim_attack",
@@ -159,6 +167,7 @@ class McpServerTests(unittest.TestCase):
                         joined = _data(await client.call_tool("iasim_join", {"name": "Nia"}))
                         self.assertTrue(joined["ok"])
                         self.assertEqual(joined["spawn"], [2, 2])
+                        self.assertEqual(joined["protocol_version"], PROTOCOL_VERSION)
 
                         said = _data(
                             await client.call_tool(
@@ -372,6 +381,59 @@ class McpServerTests(unittest.TestCase):
                     )
                     self.assertFalse(too_long["ok"])
                     self.assertEqual(too_long["error"]["code"], "MESSAGE_TOO_LONG")
+
+            asyncio.run(flow())
+        finally:
+            server.should_exit = True
+            server.force_exit = True
+            thread.join(timeout=10)
+
+        self.assertFalse(thread.is_alive())
+
+    def test_http_information_and_lifecycle_tools(self) -> None:
+        session = GameSession(42, layout=_layout())
+        token = session.tokens[0]
+        _, app = create_app(session)
+        server, thread, port = _start_server(app)
+        try:
+
+            async def flow() -> None:
+                headers = {"Authorization": f"Bearer {token}"}
+                async with (
+                    create_mcp_http_client(headers=headers) as http_client,
+                    streamable_http_client(
+                        f"http://127.0.0.1:{port}/mcp",
+                        http_client=http_client,
+                    ) as (read_stream, write_stream),
+                    ClientSession(read_stream, write_stream) as client,
+                ):
+                    await client.initialize()
+                    joined = _data(await client.call_tool("iasim_join", {"name": "Nia"}))
+                    self.assertEqual(joined["protocol_version"], PROTOCOL_VERSION)
+
+                    info = _data(await client.call_tool("iasim_get_session_info", {}))
+                    self.assertEqual(info["protocol_version"], PROTOCOL_VERSION)
+                    self.assertEqual(info["time"]["day"], 1)
+                    self.assertNotIn("seed", json.dumps(info))
+                    self.assertNotIn("rng_state", json.dumps(info))
+
+                    recipes = _data(await client.call_tool("iasim_get_recipes", {}))
+                    self.assertTrue(recipes["ok"])
+                    self.assertTrue(recipes["recipes"])
+
+                    inventory = _data(await client.call_tool("iasim_get_inventory", {}))
+                    self.assertTrue(inventory["ok"])
+                    self.assertEqual(inventory["equipment"], {})
+
+                    inspected = _data(await client.call_tool("iasim_inspect", {"x": 2, "y": 2}))
+                    self.assertTrue(inspected["ok"])
+                    self.assertEqual(inspected["target"]["kind"], "tile")
+
+                    left = _data(await client.call_tool("iasim_leave", {}))
+                    self.assertTrue(left["ok"])
+                    after = _data(await client.call_tool("iasim_observe", {}))
+                    self.assertFalse(after["ok"])
+                    self.assertEqual(after["error"]["code"], "UNAUTHORIZED")
 
             asyncio.run(flow())
         finally:
