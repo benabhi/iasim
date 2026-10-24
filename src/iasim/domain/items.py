@@ -50,6 +50,7 @@ class ItemDefinition:
     unit_weight_grams: int
     stackable: bool
     max_stack: int = 1
+    water_capacity: int = 0
 
     def __post_init__(self) -> None:
         validate_item_id(self.item_id)
@@ -61,6 +62,8 @@ class ItemDefinition:
             raise ValueError(f"max_stack must be at least 1, got {self.max_stack}")
         if not self.stackable and self.max_stack != 1:
             raise ValueError("non-stackable items must have max_stack=1")
+        if self.water_capacity < 0:
+            raise ValueError(f"water_capacity must be non-negative, got {self.water_capacity}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +89,9 @@ class ItemStack:
             raise ValueError(f"charges must be non-negative, got {self.charges}")
         if self.definition.stackable and self.charges:
             raise ValueError("stackable items cannot carry per-instance charges")
+        capacity = self.definition.water_capacity * self.quantity
+        if self.definition.water_capacity and self.charges > capacity:
+            raise ValueError(f"charges {self.charges} exceed the water capacity {capacity}")
 
     @property
     def total_weight_grams(self) -> int:

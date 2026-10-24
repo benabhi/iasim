@@ -2,8 +2,10 @@
 
 - Seed: 20261023
 - Duration: 864 ticks (3 days, 288 ticks/day)
-- Final hash: `c065a4dca20d5c96af17e313c06842c54733f9f42b1ffea89ffaa4a5eca45fe9`
+- Final hash: `8256d8aab6bf1a801124c80e2b01971ff84955473f32ad06fef32ff997a09855`
 - Replay: MATCH
+
+The scenario uses only the island's fresh water and 24 berries per agent (plus the crafted spear); no waterskin fixture is needed after the balance pass, and the waterskin charge capacity is now enforced.
 
 ## Scenario outcome
 
@@ -25,7 +27,7 @@
 | attacks_made | 12 |
 | kills | 1 |
 | mind_reports | 13 |
-| exploration_pct | 0.4656 |
+| exploration_pct | 0.4802 |
 | resources_gathered | {} |
 | items_crafted | {} |
 

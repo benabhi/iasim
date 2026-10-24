@@ -2,10 +2,10 @@
 
 The scenario is operator-scripted and deterministic. It runs on the same
 procedural island used by the normal game (seed ``20261023``), provisions the
-two agents with enough berries and waterskin charges to survive the three days,
-has them meet, form an alliance and equip spears, and forces a permanent death
-during the third day. The complete run is recorded in a run directory and
-replayed against the canonical hashes.
+two agents with berries and a spear, has them walk to fresh water, meet, form an
+alliance and equip spears, and forces a permanent death during the third day.
+The complete run is recorded in a run directory and replayed against the
+canonical hashes.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from iasim.domain.agents import Agent, AgentProfile
 from iasim.domain.alliances import AllianceStatus
 from iasim.domain.geometry import Position
 from iasim.domain.items import Inventory, ItemStack
+from iasim.domain.tiles import TileType
 from iasim.world.generation import generate_layout
 from iasim.world.layout import WorldLayout
 
@@ -30,7 +31,6 @@ SCENARIO_DAYS = 3
 TICKS_PER_DAY = 288
 SCENARIO_TICKS = SCENARIO_DAYS * TICKS_PER_DAY
 COMPETITION_START = 2 * TICKS_PER_DAY + 20
-WATERSKIN_CHARGES = 200
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,13 +63,7 @@ def _profiles() -> tuple[AgentProfile, AgentProfile]:
     catalog = load_catalog()
     berry = catalog.item("berry").definition
     spear = catalog.item("stone_spear").definition
-    waterskin = catalog.item("waterskin").definition
-    inventory = (
-        Inventory.for_strength(5)
-        .add_quantity(berry, 40)
-        .add(ItemStack(waterskin, 1, charges=WATERSKIN_CHARGES))
-        .add(ItemStack(spear, 1))
-    )
+    inventory = Inventory.for_strength(5).add_quantity(berry, 24).add(ItemStack(spear, 1))
     profile = AgentProfile(inventory=inventory)
     return (profile, profile)
 
@@ -89,9 +83,60 @@ def _quantity(session: GameSession, agent_id: str, item_id: str) -> int:
     return 0 if stack is None else stack.quantity
 
 
-def _charges(session: GameSession, agent_id: str, item_id: str) -> int:
-    stack = _agent(session, agent_id).inventory.stack_for(item_id)
-    return 0 if stack is None else stack.charges
+def _adjacent_water(session: GameSession, agent_id: str) -> Position | None:
+    origin = _agent(session, agent_id).position
+    for dx in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            position = Position(origin.x + dx, origin.y + dy)
+            if not session.state.world.contains(position):
+                continue
+            if session.state.world.tile_at(position) is TileType.FRESH_WATER:
+                return position
+    return None
+
+
+def _water_target(session: GameSession, agent_id: str) -> Position | None:
+    origin = _agent(session, agent_id).position
+    occupied = {agent.position for agent in session.state.agents if agent.is_alive}
+    water = [
+        Position(x, y)
+        for y in range(session.state.world.height)
+        for x in range(session.state.world.width)
+        if session.state.world.tile_at(Position(x, y)) is TileType.FRESH_WATER
+    ]
+    if not water:
+        return None
+    nearest = min(
+        water,
+        key=lambda position: (
+            abs(position.x - origin.x) + abs(position.y - origin.y),
+            position.y,
+            position.x,
+        ),
+    )
+    candidates = [
+        Position(nearest.x + dx, nearest.y + dy)
+        for dx in (-1, 0, 1)
+        for dy in (-1, 0, 1)
+        if (dx, dy) != (0, 0)
+    ]
+    free = [
+        position
+        for position in candidates
+        if session.state.world.contains(position)
+        and session.state.world.tile_at(position).walkable
+        and position not in occupied
+    ]
+    if not free:
+        return None
+    return min(
+        free,
+        key=lambda position: (
+            abs(position.x - origin.x) + abs(position.y - origin.y),
+            position.y,
+            position.x,
+        ),
+    )
 
 
 def _meeting_target(session: GameSession, agent_id: str, target_id: str) -> Position:
@@ -143,9 +188,15 @@ def _primary_action(
     if loot_pending and corpse_loot is not None:
         session.loot(agent_id, tick, corpse_loot)
         return social, True
-    if attributes.thirst >= 55 and _charges(session, agent_id, "waterskin") > 0:
-        session.drink(agent_id, tick, item_id="waterskin")
-        return social, False
+    if attributes.thirst >= 55:
+        water = _adjacent_water(session, agent_id)
+        if water is not None:
+            session.drink(agent_id, tick, x=water.x, y=water.y)
+            return social, False
+        target = _water_target(session, agent_id)
+        if target is not None:
+            session.move_to(agent_id, tick, target.x, target.y)
+            return social, False
     if attributes.hunger >= 55 and _quantity(session, agent_id, "berry") > 0:
         session.eat(agent_id, tick, "berry")
         return social, False
@@ -315,6 +366,10 @@ def write_scenario_report(report: ScenarioReport, path: Path) -> Path:
         f"- Duration: {report.ticks} ticks ({report.days} days, {TICKS_PER_DAY} ticks/day)",
         f"- Final hash: `{report.final_hash}`",
         f"- Replay: {'MATCH' if report.replay_matched else 'DIVERGED'}",
+        "",
+        "The scenario uses only the island's fresh water and 24 berries per "
+        "agent (plus the crafted spear); no waterskin fixture is needed after "
+        "the balance pass, and the waterskin charge capacity is now enforced.",
         "",
         "## Scenario outcome",
         "",

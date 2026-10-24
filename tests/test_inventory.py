@@ -83,6 +83,15 @@ class InventoryTests(unittest.TestCase):
         _, removed = new_target.remove_stack("waterskin")
         self.assertEqual(removed.charges, 2)
 
+    def test_waterskin_charges_are_capped_by_the_catalog_capacity(self) -> None:
+        definition = self._item("waterskin")
+        self.assertEqual(definition.water_capacity, 3)
+
+        full = ItemStack(definition, 1, charges=3)
+        self.assertEqual(full.charges, 3)
+        with self.assertRaises(ValueError):
+            ItemStack(definition, 1, charges=4)
+
     def test_stackable_items_cannot_carry_charges(self) -> None:
         with self.assertRaises(ValueError):
             ItemStack(self._item("berry"), 1, charges=1)
