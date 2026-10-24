@@ -21,7 +21,11 @@ from iasim.domain.usage import AgentUsage, CostSource, UsageEntry
 from iasim.domain.weather import WeatherKind, WeatherState
 from iasim.domain.world import Structure, StructureKind
 from iasim.ui import theme
-from iasim.ui.layout import render_base_screen, render_help_screen
+from iasim.ui.layout import (
+    render_agent_screen,
+    render_base_screen,
+    render_help_screen,
+)
 from iasim.ui.panel import PanelState, RightPanelTab
 from iasim.world.generation import generate_layout
 
@@ -669,6 +673,177 @@ class MapLayerTests(unittest.TestCase):
             screen.cell_at(1, 1).char,
             theme.STRUCTURE_GLYPHS[StructureKind.FIRE],
         )
+
+
+class AgentSheetTests(unittest.TestCase):
+    def _state(self) -> SessionState:
+        catalog = load_catalog()
+        agents = tuple(
+            Agent(
+                AgentId(f"ag_{index + 1:02d}"),
+                LAYOUT.spawn_points[index],
+                inventory=Inventory.for_strength(5).add(
+                    ItemStack(catalog.item("wood").definition, index + 1)
+                ),
+            )
+            for index in range(3)
+        )
+        return SessionState(
+            seed=42,
+            tick=0,
+            rng_state=42,
+            world=LAYOUT.world,
+            agents=agents,
+        )
+
+    def test_the_agent_sheet_is_three_columns_of_content(self) -> None:
+        screen = render_agent_screen(
+            self._state(),
+            NAMES,
+            selected_agent_id=AgentId("ag_01"),
+        )
+        text = screen.to_text()
+
+        self.assertEqual((screen.width, screen.height), (160, 45))
+        self.assertTrue(all(len(screen.row_text(y)) == 160 for y in range(45)))
+        for expected in (
+            "F2 · FICHA DEL AGENTE · Nia",
+            "IDENTIDAD",
+            "SALUD Y NECESIDADES",
+            "HABILIDADES",
+            "EQUIPO",
+            "MENTE (REPORTADO POR EL AGENTE)",
+            "TIMELINE",
+            "INVENTARIO",
+            "RELACIONES",
+            "MENSAJES",
+            "[TAB] Siguiente agente",
+        ):
+            self.assertIn(expected, text)
+
+    def test_the_sheet_follows_the_selected_agent(self) -> None:
+        screen = render_agent_screen(
+            self._state(),
+            NAMES,
+            selected_agent_id=AgentId("ag_02"),
+        )
+
+        self.assertIn("FICHA DEL AGENTE · Kai", screen.to_text())
+
+    def test_the_sheet_shows_mind_usage_and_timeline(self) -> None:
+        reports = {
+            AgentId("ag_01"): MindReport(
+                agent_id=AgentId("ag_01"),
+                tick=3,
+                intent="Buscar agua",
+                thought="Tengo sed y el río está cerca.",
+                plan="Ir al río",
+                confidence=80,
+            )
+        }
+        usage = {
+            AgentId("ag_01"): AgentUsage(
+                entries=(
+                    UsageEntry(
+                        model="gpt-5",
+                        reasoning_effort="high",
+                        input_tokens=120,
+                        output_tokens=30,
+                        cost_usd=0.01,
+                        cost_source=CostSource.REPORTED,
+                    ),
+                )
+            )
+        }
+        timeline = [f"t{index} · acción {index}" for index in range(25)]
+
+        screen = render_agent_screen(
+            self._state(),
+            NAMES,
+            selected_agent_id=AgentId("ag_01"),
+            mind_reports=reports,
+            usage=usage,
+            timeline=timeline,
+        )
+        text = screen.to_text()
+
+        self.assertIn("Intención: Buscar agua", text)
+        self.assertIn("Plan: Ir al río", text)
+        self.assertIn("gpt-5 / high: 120 in / 30 out", text)
+        self.assertIn("+5 anteriores", text)
+        self.assertIn("t24 · acción 24", text)
+        self.assertNotIn("t0 · acción 0", text)
+
+    def test_dead_agents_show_cause_killer_and_loot(self) -> None:
+        catalog = load_catalog()
+        dead = Agent(
+            AgentId("ag_02"),
+            LAYOUT.spawn_points[1],
+            attributes=AgentAttributes(health_centi=0),
+            status=AgentStatus.DEAD,
+            inventory=Inventory.for_strength(5).add(ItemStack(catalog.item("berry").definition, 3)),
+        )
+        corpse = Corpse.from_agent(
+            dead,
+            tick=7,
+            cause="attack",
+            killer_id=AgentId("ag_01"),
+        )
+        state = SessionState(
+            seed=42,
+            tick=10,
+            rng_state=42,
+            world=LAYOUT.world,
+            agents=(Agent(AgentId("ag_01"), LAYOUT.spawn_points[0]), dead),
+            corpses=(corpse,),
+        )
+
+        screen = render_agent_screen(
+            state,
+            NAMES,
+            selected_agent_id=AgentId("ag_02"),
+        )
+        text = screen.to_text()
+
+        self.assertIn("Estado: MUERTO", text)
+        self.assertIn("muerto por attack", text)
+        self.assertIn("CADÁVER", text)
+        self.assertIn("Botín:", text)
+        self.assertIn("berry x3", text)
+
+    def test_a_long_thought_wraps_within_the_column(self) -> None:
+        reports = {
+            AgentId("ag_01"): MindReport(
+                agent_id=AgentId("ag_01"),
+                tick=1,
+                intent="Sobrevivir",
+                thought=" ".join(["Necesito comida y agua potable"] * 5),
+            )
+        }
+
+        screen = render_agent_screen(
+            self._state(),
+            NAMES,
+            selected_agent_id=AgentId("ag_01"),
+            mind_reports=reports,
+        )
+        column = "\n".join(screen.row_text(y)[53:103] for y in range(3, 43))
+        matches = [line for line in column.splitlines() if "Necesito comida" in line]
+
+        self.assertGreater(len(matches), 1)
+        self.assertTrue(all(len(screen.row_text(y)) == 160 for y in range(45)))
+
+    def test_the_sheet_handles_a_missing_agent(self) -> None:
+        empty = SessionState(
+            seed=1,
+            tick=0,
+            rng_state=1,
+            world=WorldMap(width=4, height=4, tiles=(TileType.GRASS,) * 16),
+        )
+
+        screen = render_agent_screen(empty, {})
+
+        self.assertIn("sin agente seleccionado", screen.to_text())
 
 
 if __name__ == "__main__":

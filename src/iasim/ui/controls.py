@@ -26,6 +26,7 @@ KEY_GUIDE: tuple[tuple[str, str], ...] = (
     ("↑ / ↓", "Desplazar la pestaña activa"),
     ("PgUp/PgDn", "Desplazar una página"),
     ("F1", "Abrir / cerrar ayuda"),
+    ("F2", "Abrir / cerrar ficha completa del agente"),
     ("A", "Alternar ASCII"),
     ("V", "Alternar foco FOV / mapa completo"),
     ("W", "Alternar capa de clima"),
@@ -53,6 +54,13 @@ class UiCommand(StrEnum):
     RESTART = "restart"
 
 
+class UiView(StrEnum):
+    """Full-screen operator views opened from the base layout."""
+
+    NONE = "none"
+    AGENT_SHEET = "agent_sheet"
+
+
 @dataclass(frozen=True, slots=True)
 class UiState:
     """Presentation-only state controlled by the operator."""
@@ -68,6 +76,7 @@ class UiState:
     quit_requested: bool = False
     restart_requested: bool = False
     panel: PanelState = field(default_factory=PanelState)
+    view: UiView = UiView.NONE
 
 
 def handle_key(
@@ -93,9 +102,15 @@ def handle_key(
         return state
 
     if normalized == "esc":
+        if state.view is not UiView.NONE:
+            return replace(state, view=UiView.NONE)
         if state.panel.tab is not RightPanelTab.SUMMARY:
             return replace(state, panel=state.panel.with_tab(RightPanelTab.SUMMARY))
         return state
+
+    if normalized == "f2":
+        view = UiView.NONE if state.view is UiView.AGENT_SHEET else UiView.AGENT_SHEET
+        return replace(state, view=view)
 
     if normalized in {"[", "leftbracket", "lbrace"}:
         return replace(state, panel=state.panel.cycle(-1))

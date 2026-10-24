@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 
 from iasim.domain.identifiers import AgentId
-from iasim.ui.controls import KEY_GUIDE, SPEEDS, UiCommand, UiState, handle_key
+from iasim.ui.controls import KEY_GUIDE, SPEEDS, UiCommand, UiState, UiView, handle_key
 from iasim.ui.panel import PANEL_PAGE, RightPanelTab
 
 AGENTS = (AgentId("ag_01"), AgentId("ag_02"), AgentId("ag_03"))
@@ -93,6 +93,23 @@ class UiControlTests(unittest.TestCase):
 
         self.assertIsNone(cancelled.pending_confirmation)
         self.assertFalse(cancelled.quit_requested)
+
+    def test_f2_opens_and_closes_the_agent_sheet(self) -> None:
+        state = handle_key(UiState(), "f2", AGENTS)
+        self.assertEqual(state.view, UiView.AGENT_SHEET)
+        self.assertEqual(handle_key(state, "f2", AGENTS).view, UiView.NONE)
+
+        opened = handle_key(UiState(), "f2", AGENTS)
+        self.assertEqual(handle_key(opened, "esc", AGENTS).view, UiView.NONE)
+
+    def test_tab_cycles_agents_without_closing_the_sheet(self) -> None:
+        state = handle_key(UiState(), "f2", AGENTS)
+        state = handle_key(state, "2", AGENTS)
+
+        state = handle_key(state, "tab", AGENTS)
+
+        self.assertEqual(state.view, UiView.AGENT_SHEET)
+        self.assertEqual(state.selected_agent_id, AgentId("ag_03"))
 
     def test_w_toggles_the_weather_overlay(self) -> None:
         state = handle_key(UiState(), "w", AGENTS)
