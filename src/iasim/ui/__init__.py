@@ -19,6 +19,7 @@ from iasim.ui.layout import (
     render_events_screen,
     render_help_screen,
     render_map_screen,
+    render_metrics_screen,
     render_replay_screen,
     render_world_screen,
 )
@@ -47,6 +48,7 @@ __all__ = [
     "render_events_screen",
     "render_help_screen",
     "render_map_screen",
+    "render_metrics_screen",
     "render_replay_screen",
     "render_world_screen",
 ]

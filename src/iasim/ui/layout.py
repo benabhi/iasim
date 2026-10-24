@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -350,6 +351,169 @@ def render_replay_screen(
         banner=banner,
         footer=REPLAY_FOOTER,
     )
+
+
+_METRICS_COLUMNS: tuple[tuple[str, str, int], ...] = (
+    ("name", "AGENTE", 18),
+    ("survival_ticks", "SUP", 5),
+    ("days_survived", "DÍAS", 7),
+    ("critical_need_ratio", "CRÍT", 6),
+    ("exploration_pct", "EXPL", 6),
+    ("distance_traveled", "DIST", 5),
+    ("actions_total", "ACC", 5),
+    ("actions_failed", "FALL", 5),
+    ("resources_gathered", "RECURSOS", 18),
+    ("items_crafted", "CRAFT", 14),
+    ("messages_sent", "MSG", 4),
+    ("alliances_formed", "ALIANZAS", 8),
+    ("attacks_made", "ATQ", 4),
+    ("kills", "KILLS", 6),
+    ("mind_reports", "MENTE", 6),
+    ("decision_latency_p50_ms", "P50", 8),
+)
+
+_METRICS_FOOTER = "[ESC] Volver│[F7] Cerrar métricas"
+
+
+def render_metrics_screen(
+    snapshot: Mapping[str, Any],
+    *,
+    final: bool = False,
+    initial: Mapping[str, Any] | None = None,
+    ascii_mode: bool = False,
+) -> BaseScreen:
+    """Render the F7 metrics view from the same snapshot exported to files."""
+    canvas = _Canvas()
+    canvas.fill(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, fg=theme.WHITE, bg=theme.BLACK)
+    session = snapshot.get("session", {})
+    agents = snapshot.get("agents", {})
+    state_hash = str(snapshot.get("final_state_hash", ""))
+    title = "RESUMEN FINAL" if final else "SESIÓN EN CURSO"
+    canvas.put(
+        2,
+        0,
+        f"F7 · MÉTRICAS · {title} · hash {state_hash[:24]}",
+        fg=theme.CYAN,
+        bold=True,
+    )
+    canvas.put(
+        2,
+        1,
+        "Valores idénticos a summary.json y metrics.csv · las tasas llevan "
+        "numerador y denominador · — = sin dato",
+        fg=theme.DIM,
+    )
+    canvas.put(2, 3, _metrics_header_row(), fg=theme.DIM, bold=True)
+    y = 4
+    canvas.put(2, y, _metrics_row("SESIÓN", session, bold=True), fg=theme.CYAN)
+    y += 1
+    for agent_id in sorted(agents):
+        agent = agents[agent_id]
+        name = str(agent.get("name") or agent_id)
+        canvas.put(2, y, _metrics_row(name, agent), fg=theme.WHITE)
+        y += 1
+    y += 1
+    for line in _metrics_detail_lines(session, initial):
+        if y >= BOTTOM_BAR_Y:
+            break
+        canvas.put(2, y, _clip(line, SCREEN_WIDTH - 4), fg=theme.DIM)
+        y += 1
+    canvas.fill(0, BOTTOM_BAR_Y, SCREEN_WIDTH, 1, fg=theme.BAR_FG, bg=theme.BAR_BG)
+    footer = _METRICS_FOOTER
+    if ascii_mode:
+        footer = footer.replace("│", theme.ASCII_VERTICAL)
+    canvas.put(
+        0,
+        BOTTOM_BAR_Y,
+        footer + " " * SCREEN_WIDTH,
+        fg=theme.BAR_FG,
+        bg=theme.BAR_BG,
+        bold=True,
+    )
+    return canvas.to_screen()
+
+
+def _metrics_header_row() -> str:
+    return " ".join(
+        f"{label:>{width}}" if key != "name" else f"{label:<{width}}"
+        for key, label, width in _METRICS_COLUMNS
+    )
+
+
+def _metrics_row(
+    name: str,
+    metrics: Mapping[str, Any],
+    *,
+    bold: bool = False,
+) -> str:
+    del bold
+    parts: list[str] = []
+    for key, _label, width in _METRICS_COLUMNS:
+        if key == "name":
+            parts.append(f"{_clip(name, width):<{width}}")
+            continue
+        parts.append(f"{_clip(_metric_text(metrics.get(key)), width):>{width}}")
+    return " ".join(parts)
+
+
+def _metric_text(value: object) -> str:
+    if value is None:
+        return "—"
+    if isinstance(value, Mapping):
+        return json.dumps(value, sort_keys=True, separators=(",", ":"))
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _metrics_detail_lines(
+    session: Mapping[str, Any],
+    initial: Mapping[str, Any] | None,
+) -> list[str]:
+    resources = _metric_text(session.get("resources_gathered"))
+    crafted = _metric_text(session.get("items_crafted"))
+    built = _metric_text(session.get("structures_built"))
+    lines = [
+        f"Causa: {_metric_text(session.get('cause_of_death'))} · "
+        f"Autor: {_metric_text(session.get('killed_by'))} · "
+        f"P50/P95: {_metric_text(session.get('decision_latency_p50_ms'))}/"
+        f"{_metric_text(session.get('decision_latency_p95_ms'))} ms · "
+        f"Muestras: {_metric_text(session.get('decision_latency_samples'))}",
+        f"Componentes: críticos {_metric_text(session.get('critical_need_ticks'))}/"
+        f"{_metric_text(session.get('alive_ticks'))} · exploradas "
+        f"{_metric_text(session.get('explored_cells'))}/"
+        f"{_metric_text(session.get('transitable_cells'))} · acciones "
+        f"{_metric_text(session.get('actions_failed'))}/"
+        f"{_metric_text(session.get('actions_total'))} · mente "
+        f"{_metric_text(session.get('mind_reports'))}/"
+        f"{_metric_text(session.get('alive_ticks'))}",
+        f"Recursos: {resources} · Creado: {crafted} · Construido: {built}",
+    ]
+    if initial is not None:
+        lines.append(
+            "Inicio: supervivencia "
+            f"{_metric_text(initial.get('survival_ticks'))} · acciones "
+            f"{_metric_text(initial.get('actions_total'))} · exploración "
+            f"{_metric_text(initial.get('exploration_pct'))}"
+        )
+        lines.append(
+            "Δ: supervivencia "
+            f"{_delta(session.get('survival_ticks'), initial.get('survival_ticks'))} · "
+            f"acciones "
+            f"{_delta(session.get('actions_total'), initial.get('actions_total'))} · "
+            f"exploración "
+            f"{_delta(session.get('exploration_pct'), initial.get('exploration_pct'))}"
+        )
+    return lines
+
+
+def _delta(current: object, initial: object) -> str:
+    if not isinstance(current, int | float) or not isinstance(initial, int | float):
+        return "—"
+    value = current - initial
+    if isinstance(value, float):
+        return f"{value:+.4f}"
+    return f"{value:+d}"
 
 
 def render_agent_screen(
