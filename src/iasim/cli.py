@@ -12,12 +12,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NoReturn
 
-from iasim import MCP_PROTOCOL_VERSION, __version__
+from iasim import __version__
 from iasim.app.session import GameSession
 from iasim.config import ConfigError, IasimConfig, load_config
 from iasim.domain.usage import ModelPricing
 from iasim.errors import ExitCode, IasimError, PersistenceError
 from iasim.mcp.server import run_server
+from iasim.protocol import PROTOCOL_VERSION
 
 LOG_FILENAME = "iasim.log"
 _LOG_FIELDS = (
@@ -99,7 +100,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version",
         action="version",
-        version=f"IASim {__version__} (MCP protocol {MCP_PROTOCOL_VERSION})",
+        version=f"IASim {__version__} (MCP protocol {PROTOCOL_VERSION})",
     )
     return parser
 
@@ -276,7 +277,7 @@ def _startup_fields(
         "iasim_version": __version__,
         "mcp_host": config.mcp.host,
         "mcp_port": config.mcp.port,
-        "mcp_protocol_version": MCP_PROTOCOL_VERSION,
+        "mcp_protocol_version": PROTOCOL_VERSION,
         "run_dir": str(run_dir),
         "seed": seed,
     }

@@ -21,8 +21,8 @@ from starlette.requests import Request
 from iasim.app.session import GameSession
 from iasim.domain.geometry import Position
 from iasim.domain.tiles import TileType, WorldMap
-from iasim.mcp.protocol import PROTOCOL_VERSION
 from iasim.mcp.server import LAN_WARNING, create_app, create_server, server_connection_info
+from iasim.protocol import PROTOCOL_VERSION
 from iasim.world.layout import WorldLayout
 
 TOOL_NAMES = {
@@ -419,7 +419,35 @@ class McpServerTests(unittest.TestCase):
                     ClientSession(read_stream, write_stream) as client,
                 ):
                     await client.initialize()
-                    joined = _data(await client.call_tool("iasim_join", {"name": "Nia"}))
+                    rejected = _data(
+                        await client.call_tool(
+                            "iasim_join",
+                            {
+                                "name": "Nia",
+                                "protocol_version": "iasim-mcp/9.9",
+                            },
+                        )
+                    )
+                    self.assertFalse(rejected["ok"])
+                    self.assertEqual(
+                        rejected["error"]["code"],
+                        "UNSUPPORTED_PROTOCOL_VERSION",
+                    )
+                    self.assertEqual(
+                        rejected["error"]["details"]["supported"],
+                        PROTOCOL_VERSION,
+                    )
+
+                    joined = _data(
+                        await client.call_tool(
+                            "iasim_join",
+                            {
+                                "name": "Nia",
+                                "protocol_version": PROTOCOL_VERSION,
+                            },
+                        )
+                    )
+                    self.assertTrue(joined["ok"])
                     self.assertEqual(joined["protocol_version"], PROTOCOL_VERSION)
 
                     info = _data(await client.call_tool("iasim_get_session_info", {}))

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from iasim import MCP_PROTOCOL_VERSION, __version__
+from iasim import __version__
 from iasim.cli import main
 from iasim.errors import (
     ConfigurationError,
@@ -20,6 +20,7 @@ from iasim.errors import (
     PersistenceError,
     WorldGenerationError,
 )
+from iasim.protocol import PROTOCOL_VERSION
 
 
 class CliTests(unittest.TestCase):
@@ -38,7 +39,7 @@ class CliTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.code, 0)
         self.assertIn(__version__, output.getvalue())
-        self.assertIn(MCP_PROTOCOL_VERSION, output.getvalue())
+        self.assertIn(PROTOCOL_VERSION, output.getvalue())
 
     def test_help_flag_exits_successfully(self) -> None:
         output = io.StringIO()
@@ -61,7 +62,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(event["event"], "session_started")
         self.assertEqual(event["seed"], 123)
         self.assertEqual(event["iasim_version"], __version__)
-        self.assertEqual(event["mcp_protocol_version"], MCP_PROTOCOL_VERSION)
+        self.assertEqual(event["mcp_protocol_version"], PROTOCOL_VERSION)
         self.assertIn("seed=123", output.getvalue())
         self.assertNotIn("token", log_text)
 
