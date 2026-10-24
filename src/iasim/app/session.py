@@ -92,6 +92,7 @@ from iasim.domain.weather import (
     apply_weather_wetness,
 )
 from iasim.errors import PersistenceError
+from iasim.protocol import MAX_PROTOCOL_VERSION_LENGTH, PROTOCOL_VERSION
 from iasim.world.generation import generate_layout
 from iasim.world.layout import WorldLayout
 from iasim.world.pathfinding_actions import move_to_resolvers
@@ -339,12 +340,28 @@ class GameSession:
         """Return the joined agent id bound to a token."""
         return self._token_agents.get(token)
 
-    def join(self, name: str, token: str) -> dict[str, Any]:
+    def join(
+        self,
+        name: str,
+        token: str,
+        *,
+        protocol_version: str | None = None,
+    ) -> dict[str, Any]:
         """Join a free slot identified by a bearer token."""
         with self._lock:
             slot = self._token_slots.get(token)
             if slot is None:
                 return self._error("UNAUTHORIZED", "invalid bearer token")
+            if protocol_version is not None and not _protocol_supported(protocol_version):
+                return self._error(
+                    "UNSUPPORTED_PROTOCOL_VERSION",
+                    f"unsupported protocol version {protocol_version!r}; "
+                    f"this server speaks {PROTOCOL_VERSION}",
+                    details={
+                        "supported": PROTOCOL_VERSION,
+                        "received": protocol_version,
+                    },
+                )
             if slot in self._joined_slots:
                 return self._error("ALREADY_JOINED", "this token is already bound to an agent")
             if self._phase is SessionPhase.FINISHED:
@@ -399,6 +416,7 @@ class GameSession:
             return {
                 "ok": True,
                 "schema_version": SCHEMA_VERSION,
+                "protocol_version": PROTOCOL_VERSION,
                 "agent_id": agent_id,
                 "spawn": [spawn.x, spawn.y],
                 "tick": self._state.tick,
@@ -1386,6 +1404,7 @@ class GameSession:
             payload: dict[str, Any] = {
                 "status": "ok",
                 "schema_version": SCHEMA_VERSION,
+                "protocol_version": PROTOCOL_VERSION,
                 "tick": self._state.tick,
                 "agents": len(self._names),
             }
@@ -1728,6 +1747,7 @@ class GameSession:
         ]
         observation: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
+            "protocol_version": PROTOCOL_VERSION,
             "tick": self._state.tick,
             "session": self._session_info_locked(),
             "server_time_ms": int(time.time() * 1000),
@@ -2047,6 +2067,16 @@ class GameSession:
         return {
             "ok": False,
             "schema_version": SCHEMA_VERSION,
+            "protocol_version": PROTOCOL_VERSION,
             "tick": self._state.tick if tick is None else tick,
             "error": error,
         }
+
+
+def _protocol_supported(value: object) -> bool:
+    """Return whether a client-declared protocol version is supported."""
+    return (
+        isinstance(value, str)
+        and 0 < len(value) <= MAX_PROTOCOL_VERSION_LENGTH
+        and value.strip() == PROTOCOL_VERSION
+    )

@@ -1166,6 +1166,8 @@ El reporte es **voluntario, no verificado y potencialmente engañoso**. La UI lo
 - Por defecto solo escucha en loopback. Para jugar en la misma red, el comando de arranque acepta `--host 0.0.0.0` (o la IP local) de forma explícita; la GUI muestra la URL LAN y una advertencia de exposición.
 - Autenticación: token Bearer por slot de agente, generado al iniciar el servidor y escrito en `agents.json` con permisos restringidos. Cada slot tiene un token estable mientras el servidor vive; al desconectarse el agente, el slot queda libre y el mismo token puede usarse para una conexión nueva. El operador puede rotar tokens reiniciando el servidor.
 - El servidor no arranca en LAN con `--dev-open`; esa opción solo se permite en loopback para pruebas.
+- Versión del protocolo: `iasim-mcp/1.0`. Se expone en el handshake MCP (`serverInfo.version`), en la respuesta de `iasim_join`, en `iasim_get_session_info`, en `/healthz` y en la observación. `iasim_join` acepta `protocol_version` opcional: si el cliente declara una versión distinta, el servidor responde `UNSUPPORTED_PROTOCOL_VERSION` con `details.supported` y `details.received`.
+- Compatibilidad: un cambio incompatible en el catálogo de tools, en sus esquemas o en la forma de la observación incrementa la parte mayor de `iasim-mcp/1.0` y el `schema_version`; el MVP solo soporta esta versión.
 - Los tokens no se escriben en logs ni en la GUI. La GUI solo muestra si un slot está libre, conectado o desconectado.
 - En el MVP el transporte LAN es HTTP sin TLS y debe usarse en una red de confianza. Para redes no confiables se debe usar un túnel/VPN; TLS queda fuera del MVP.
 
@@ -1186,7 +1188,7 @@ El reporte es **voluntario, no verificado y potencialmente engañoso**. La UI lo
 - Si intenta actuar dos veces en el mismo tick, recibe `ALREADY_ACTED`.
 - Si el deadline vence, el servidor resuelve con las acciones recibidas y marca `skip`.
 - La observación incluye `deadline_ms` y `server_time_ms` para que el cliente gestione su presupuesto.
-- El servidor expone la versión `iasim-mcp/1.0` y un `schema_version` en la observación.
+- El servidor expone la versión `iasim-mcp/1.0`; la observación incluye `protocol_version` y `schema_version`.
 
 ### 6.3 Catálogo de tools
 
@@ -1194,7 +1196,7 @@ El reporte es **voluntario, no verificado y potencialmente engañoso**. La UI lo
 
 | Tool | Argumentos | Costo | Descripción |
 |---|---|---|---|
-| `iasim_join` | `name` | — | Registra al agente del token en el mundo abierto. Devuelve `agent_id`, spawn y estado. |
+| `iasim_join` | `name`, `protocol_version?` | — | Registra al agente del token en el mundo abierto. Devuelve `agent_id`, spawn, estado y `protocol_version`. |
 | `iasim_observe` | — | Libre | Devuelve la observación del tick actual o la última disponible. |
 | `iasim_wait_for_tick` | `since_tick`, `timeout_ms?` | Libre | Espera hasta que haya un tick nuevo; devuelve observación o `NO_NEW_TICK`. |
 | `iasim_get_recipes` | — | Libre | Recetas conocidas, requisitos y estaciones. |
@@ -1347,7 +1349,7 @@ La observación es el contrato principal entre el juego y el agente. Ejemplo abr
 
 Campos obligatorios:
 
-- `schema_version`, `tick`, `session`, `server_time_ms`, `deadline_ms`.
+- `schema_version`, `protocol_version`, `tick`, `session`, `server_time_ms`, `deadline_ms`.
 - `session.phase` es `waiting`, `running` o `finished`; incluye `max_agents`, `joined_agents` y `alive_agents`, `waiting_reason` si está esperando (`no_agents`, `no_active_agents` o `last_death`) y `end_reason` si terminó.
 - `time`, `agent`, `environment`.
 - `agent.state` es `active`, `absent`, `sleeping` o `dead`; refleja la participación del agente en el turno.
@@ -1398,6 +1400,7 @@ Las tools devuelven un resultado estructurado. Los errores de validación se dev
 | `AGENT_ABSENT` | El agente conectado está ausente por timeouts; no puede actuar hasta volver a responder. |
 | `TICK_IN_PROGRESS` | El tick actual ya tiene acciones pendientes; el agente debe reintentar la conexión en el siguiente tick. |
 | `SESSION_FINISHED` | El operador finalizó la sesión; no se aceptan más conexiones ni acciones. |
+| `UNSUPPORTED_PROTOCOL_VERSION` | El cliente declaró una versión de protocolo distinta de `iasim-mcp/1.0`; `details` incluye `supported` y `received`. |
 | `NOT_YOUR_TURN` | La acción no corresponde al agente autenticado. |
 | `INVALID_TARGET` | Objetivo inexistente o no visible. |
 | `OUT_OF_RANGE` | Objetivo fuera de alcance. |

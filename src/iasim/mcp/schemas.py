@@ -11,6 +11,8 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from iasim.protocol import MAX_PROTOCOL_VERSION_LENGTH
+
 Tick = Annotated[int, Field(ge=0, description="Tick the request belongs to.")]
 PositiveQuantity = Annotated[int, Field(ge=1, description="Units of the item; at least one.")]
 TimeoutMillis = Annotated[
@@ -23,6 +25,14 @@ RequestId = Annotated[
         min_length=1,
         max_length=64,
         description="Idempotency key; repeating it replays the first response.",
+    ),
+]
+ProtocolVersion = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=MAX_PROTOCOL_VERSION_LENGTH,
+        description="Protocol version the client speaks, e.g. iasim-mcp/1.0.",
     ),
 ]
 

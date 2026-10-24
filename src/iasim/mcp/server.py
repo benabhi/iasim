@@ -24,8 +24,15 @@ from iasim.mcp.http import BufferedRequestBodyMiddleware
 from iasim.mcp.idempotency import MAX_REQUEST_ID_LENGTH, RequestCache, RequestSignature
 from iasim.mcp.limits import MAX_TEXT_FIELD_LENGTH, LimitKind, RateLimiter
 from iasim.mcp.policy import enforce_tool_policy
-from iasim.mcp.protocol import PROTOCOL_VERSION
-from iasim.mcp.schemas import PositiveQuantity, RequestId, Tick, TimeoutMillis, TradeItem
+from iasim.mcp.schemas import (
+    PositiveQuantity,
+    ProtocolVersion,
+    RequestId,
+    Tick,
+    TimeoutMillis,
+    TradeItem,
+)
+from iasim.protocol import PROTOCOL_VERSION
 
 DEFAULT_RESOURCE_URL = "http://127.0.0.1:8765/mcp"
 DEFAULT_ISSUER_URL = "http://127.0.0.1:8765"
@@ -129,16 +136,17 @@ def create_server(
     )
 
     @server.tool()
-    def iasim_join(name: str) -> dict[str, Any]:
-        """Join the session with the bearer token and return the agent id."""
+    def iasim_join(
+        name: str,
+        protocol_version: ProtocolVersion | None = None,
+    ) -> dict[str, Any]:
+        """Join the session and declare the protocol version the client speaks."""
         if _text_too_long(name):
             return _message_too_long(session)
         access = get_access_token()
         if access is None:
             return _unauthorized(session)
-        result = session.join(name, access.token)
-        if result.get("ok"):
-            result["protocol_version"] = PROTOCOL_VERSION
+        result = session.join(name, access.token, protocol_version=protocol_version)
         return result
 
     @server.tool()
@@ -712,6 +720,7 @@ def _rate_limited(session: GameSession, kind: LimitKind) -> dict[str, Any]:
     return {
         "ok": False,
         "schema_version": SCHEMA_VERSION,
+        "protocol_version": PROTOCOL_VERSION,
         "tick": session.tick,
         "error": {
             "code": "RATE_LIMITED",
@@ -724,6 +733,7 @@ def _message_too_long(session: GameSession) -> dict[str, Any]:
     return {
         "ok": False,
         "schema_version": SCHEMA_VERSION,
+        "protocol_version": PROTOCOL_VERSION,
         "tick": session.tick,
         "error": {
             "code": "MESSAGE_TOO_LONG",
@@ -736,6 +746,7 @@ def _invalid_request_id(session: GameSession) -> dict[str, Any]:
     return {
         "ok": False,
         "schema_version": SCHEMA_VERSION,
+        "protocol_version": PROTOCOL_VERSION,
         "tick": session.tick,
         "error": {
             "code": "INVALID_REQUEST_ID",
@@ -748,6 +759,7 @@ def _request_id_conflict(session: GameSession) -> dict[str, Any]:
     return {
         "ok": False,
         "schema_version": SCHEMA_VERSION,
+        "protocol_version": PROTOCOL_VERSION,
         "tick": session.tick,
         "error": {
             "code": "REQUEST_ID_CONFLICT",
@@ -760,6 +772,7 @@ def _unauthorized(session: GameSession) -> dict[str, Any]:
     return {
         "ok": False,
         "schema_version": SCHEMA_VERSION,
+        "protocol_version": PROTOCOL_VERSION,
         "tick": session.tick,
         "error": {
             "code": "UNAUTHORIZED",

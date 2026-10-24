@@ -13,8 +13,8 @@ from iasim.domain.geometry import Position
 from iasim.domain.items import EquipSlot
 from iasim.domain.tiles import TileType, WorldMap
 from iasim.mcp.policy import FORBIDDEN_TOOL_TOKENS
-from iasim.mcp.protocol import PROTOCOL_VERSION
 from iasim.mcp.server import create_server
+from iasim.protocol import PROTOCOL_VERSION
 from iasim.world.layout import WorldLayout
 
 
