@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
+from iasim.domain.geometry import Position
 from iasim.domain.identifiers import AgentId
 from iasim.ui.events import next_category
 from iasim.ui.panel import PANEL_PAGE, PANEL_STEP, PanelState, RightPanelTab
@@ -37,6 +38,8 @@ KEY_GUIDE: tuple[tuple[str, str], ...] = (
     ("A", "Alternar ASCII"),
     ("V", "Alternar foco FOV / mapa completo"),
     ("W", "Alternar capa de clima"),
+    ("X", "Activar / desactivar cursor de inspección"),
+    ("Enter", "Fijar / liberar la inspección"),
     ("Q", "Salir (confirmar)"),
     ("R", "Reiniciar (confirmar)"),
     ("ESC", "Cancelar / cerrar ayuda o volver a RESUMEN"),
@@ -92,12 +95,16 @@ class UiState:
     event_agent_only: bool = False
     event_page: int = 0
     event_search_open: bool = False
+    cursor: Position | None = None
+    inspection_pinned: bool = False
 
 
 def handle_key(
     state: UiState,
     key: str,
     agent_ids: Sequence[AgentId],
+    *,
+    world_size: tuple[int, int] | None = None,
 ) -> UiState:
     """Apply one keyboard event and return the next presentation state."""
     normalized = _normalize_key(key)
@@ -134,11 +141,21 @@ def handle_key(
         return state
 
     if normalized == "esc":
+        if state.cursor is not None:
+            return replace(state, cursor=None, inspection_pinned=False)
         if state.view is not UiView.NONE:
             return replace(state, view=UiView.NONE)
         if state.panel.tab is not RightPanelTab.SUMMARY:
             return replace(state, panel=state.panel.with_tab(RightPanelTab.SUMMARY))
         return state
+
+    if normalized == "x":
+        if state.cursor is None:
+            return replace(state, cursor=Position(0, 0))
+        return replace(state, cursor=None, inspection_pinned=False)
+
+    if normalized == "enter" and state.cursor is not None:
+        return replace(state, inspection_pinned=not state.inspection_pinned)
 
     if normalized == "f2":
         view = UiView.NONE if state.view is UiView.AGENT_SHEET else UiView.AGENT_SHEET
@@ -181,6 +198,14 @@ def handle_key(
 
     if normalized in {"]", "rightbracket", "rbrace"}:
         return replace(state, panel=state.panel.cycle(1))
+
+    if state.cursor is not None and normalized in {"up", "down", "left", "right"}:
+        dx = {"left": -1, "right": 1}.get(normalized, 0)
+        dy = {"up": -1, "down": 1}.get(normalized, 0)
+        return replace(
+            state,
+            cursor=_move_cursor(state.cursor, dx, dy, world_size),
+        )
 
     if normalized in {"up", "down"}:
         if state.view is UiView.EVENT_LOG:
@@ -248,6 +273,19 @@ def handle_key(
 
 def _move_page(page: int, delta: int) -> int:
     return max(0, page + delta)
+
+
+def _move_cursor(
+    cursor: Position,
+    dx: int,
+    dy: int,
+    world_size: tuple[int, int] | None,
+) -> Position:
+    width, height = world_size or (80, 40)
+    return Position(
+        min(max(cursor.x + dx, 0), max(0, width - 1)),
+        min(max(cursor.y + dy, 0), max(0, height - 1)),
+    )
 
 
 def _normalize_key(key: str) -> str:
