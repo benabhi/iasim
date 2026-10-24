@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import socket
+import threading
+import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
+import uvicorn
 from mcp.server import MCPServer
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.provider import AccessToken
@@ -19,8 +23,9 @@ from iasim.app.session import GameSession
 from iasim.config import is_loopback_host
 from iasim.domain.identifiers import AgentId
 from iasim.domain.items import EquipSlot
+from iasim.errors import McpError
 from iasim.mcp.disconnect import TerminateSessionMiddleware
-from iasim.mcp.http import BufferedRequestBodyMiddleware
+from iasim.mcp.http import BufferedRequestBodyMiddleware, DevOpenAuthMiddleware
 from iasim.mcp.idempotency import MAX_REQUEST_ID_LENGTH, RequestCache, RequestSignature
 from iasim.mcp.limits import MAX_TEXT_FIELD_LENGTH, LimitKind, RateLimiter
 from iasim.mcp.policy import enforce_tool_policy
@@ -786,12 +791,15 @@ def create_app(
     *,
     resource_url: str = DEFAULT_RESOURCE_URL,
     issuer_url: str = DEFAULT_ISSUER_URL,
+    dev_open: bool = False,
 ) -> tuple[MCPServer[Any], Starlette]:
     """Create the MCP server and its streamable HTTP application."""
     server = create_server(session, resource_url=resource_url, issuer_url=issuer_url)
     app = server.streamable_http_app()
     app.add_middleware(TerminateSessionMiddleware, session=session)
     app.add_middleware(BufferedRequestBodyMiddleware)
+    if dev_open:
+        app.add_middleware(DevOpenAuthMiddleware, token=session.tokens[0])
     return server, app
 
 
@@ -800,15 +808,110 @@ def run_server(
     *,
     host: str = "127.0.0.1",
     port: int = 8765,
+    dev_open: bool = False,
 ) -> None:
     """Run the streamable HTTP MCP server until stopped."""
+    server = start_server(
+        session,
+        host=host,
+        port=port,
+        dev_open=dev_open,
+    )
+    print(f"MCP endpoint: {server.mcp_url}")
+    if server.warning is not None:
+        print(f"warning: {server.warning}")
+    try:
+        while server.healthy:
+            time.sleep(0.1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.stop()
+
+
+@dataclass(slots=True)
+class RunningServer:
+    """A background uvicorn server around the authenticated MCP application."""
+
+    host: str
+    port: int
+    mcp_url: str
+    issuer_url: str
+    warning: str | None
+    _server: uvicorn.Server
+    _thread: threading.Thread
+
+    @property
+    def healthy(self) -> bool:
+        """Return whether the background server is still accepting requests."""
+        return self._thread.is_alive() and not self._server.should_exit
+
+    def stop(self, *, timeout: float = 5.0) -> None:
+        """Ask the server to stop and wait for its thread to finish."""
+        self._server.should_exit = True
+        self._server.force_exit = True
+        if self._thread.is_alive():
+            self._thread.join(timeout=timeout)
+
+    def url_for(self, path: str = "/mcp") -> str:
+        """Return one absolute URL for this server."""
+        return f"http://{self._advertised_host}:{self.port}{path}"
+
+    @property
+    def _advertised_host(self) -> str:
+        return self.mcp_url.removeprefix("http://").split(":", 1)[0]
+
+
+def start_server(
+    session: GameSession,
+    *,
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    ready_timeout: float = 10.0,
+    dev_open: bool = False,
+) -> RunningServer:
+    """Start the authenticated MCP server in a background thread."""
+    if dev_open and not is_loopback_host(host):
+        raise McpError("dev_open requires a loopback host")
     connection = server_connection_info(host, port)
-    print(f"MCP endpoint: {connection['mcp_url']}")
-    if connection["warning"] is not None:
-        print(f"warning: {connection['warning']}")
-    server = create_server(
+    _, app = create_app(
         session,
         resource_url=str(connection["mcp_url"]),
         issuer_url=str(connection["issuer_url"]),
+        dev_open=dev_open,
     )
-    server.run("streamable-http", host=host, port=port)
+    config = uvicorn.Config(
+        app,
+        host=host,
+        port=port,
+        log_level="warning",
+    )
+    server = uvicorn.Server(config)
+    thread = threading.Thread(
+        target=server.run,
+        name="iasim-mcp",
+        daemon=True,
+    )
+    thread.start()
+    deadline = time.monotonic() + ready_timeout
+    while not server.started and thread.is_alive() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    if not server.started:
+        server.should_exit = True
+        thread.join(timeout=2)
+        raise McpError(f"MCP server did not start on {host}:{port}")
+    actual_port = port
+    if port == 0:
+        sockets = getattr(server, "servers", ())
+        if sockets and sockets[0].sockets:
+            actual_port = int(sockets[0].sockets[0].getsockname()[1])
+    actual = server_connection_info(host, actual_port)
+    return RunningServer(
+        host=host,
+        port=actual_port,
+        mcp_url=str(actual["mcp_url"]),
+        issuer_url=str(actual["issuer_url"]),
+        warning=actual["warning"],
+        _server=server,
+        _thread=thread,
+    )

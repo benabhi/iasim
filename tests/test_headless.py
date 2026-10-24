@@ -130,35 +130,52 @@ class HeadlessRunnerTests(unittest.TestCase):
 
 
 class HeadlessCliTests(unittest.TestCase):
+    def _server(self) -> object:
+        class _FakeServer:
+            mcp_url = "http://127.0.0.1:8765/mcp"
+            warning = None
+
+            def stop(self) -> None:
+                pass
+
+        return _FakeServer()
+
     def test_headless_serve_starts_the_simulation_without_a_window(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            with patch("iasim.cli.run_server") as run_server:
-                code = cli_module.main(
-                    [
-                        "serve",
-                        "--headless",
-                        "--seed",
-                        "7",
-                        "--log-dir",
-                        directory,
-                    ]
-                )
-
-            self.assertEqual(code, int(ExitCode.SUCCESS))
-            run_server.assert_called_once()
-            session = run_server.call_args.args[0]
-            self.assertIsInstance(session, GameSession)
-            self.assertFalse(session.is_finished)
-
-    def test_gui_mode_still_requires_the_window(self) -> None:
         with (
             tempfile.TemporaryDirectory() as directory,
-            patch("iasim.cli.run_server") as run_server,
+            patch("iasim.cli.start_server", return_value=self._server()) as start,
+            patch("iasim.cli.wait_for_shutdown") as wait,
+            patch("iasim.cli.run_gui") as gui,
+        ):
+            code = cli_module.main(
+                [
+                    "serve",
+                    "--headless",
+                    "--seed",
+                    "7",
+                    "--log-dir",
+                    directory,
+                ]
+            )
+
+        self.assertEqual(code, int(ExitCode.SUCCESS))
+        start.assert_called_once()
+        wait.assert_called_once()
+        gui.assert_not_called()
+        self.assertIsInstance(start.call_args.args[0], GameSession)
+
+    def test_gui_mode_opens_the_operator_window(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch("iasim.cli.start_server", return_value=self._server()),
+            patch("iasim.cli.wait_for_shutdown") as wait,
+            patch("iasim.cli.run_gui") as gui,
         ):
             code = cli_module.main(["serve", "--seed", "7", "--log-dir", directory])
 
-        self.assertEqual(code, int(ExitCode.CONFIGURATION))
-        run_server.assert_not_called()
+        self.assertEqual(code, int(ExitCode.SUCCESS))
+        gui.assert_called_once()
+        wait.assert_not_called()
 
     def test_headless_load_uses_the_saved_run(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -168,7 +185,10 @@ class HeadlessCliTests(unittest.TestCase):
             session.wait(first, 0)
             saved = session.save()
 
-            with patch("iasim.cli.run_server") as run_server:
+            with (
+                patch("iasim.cli.start_server", return_value=self._server()) as start,
+                patch("iasim.cli.wait_for_shutdown"),
+            ):
                 code = cli_module.main(
                     [
                         "serve",
@@ -181,7 +201,7 @@ class HeadlessCliTests(unittest.TestCase):
                 )
 
             self.assertEqual(code, int(ExitCode.SUCCESS))
-            loaded = run_server.call_args.args[0]
+            loaded = start.call_args.args[0]
             self.assertEqual(loaded.state.tick, session.state.tick)
 
     def test_a_missing_load_file_returns_the_persistence_exit_code(self) -> None:

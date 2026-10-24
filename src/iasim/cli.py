@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import secrets
@@ -18,8 +19,9 @@ from iasim.app.session import GameSession
 from iasim.config import ConfigError, IasimConfig, load_config
 from iasim.domain.usage import ModelPricing
 from iasim.errors import ExitCode, IasimError, PersistenceError
-from iasim.mcp.server import run_server
+from iasim.mcp.server import start_server
 from iasim.protocol import PROTOCOL_VERSION
+from iasim.ui.app import run_gui, wait_for_shutdown
 
 LOG_FILENAME = "iasim.log"
 _LOG_FIELDS = (
@@ -72,6 +74,16 @@ def _positive_int(value: str) -> int:
     return parsed
 
 
+def _non_negative_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"expected a non-negative integer, got {value!r}") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError(f"expected a non-negative integer, got {value!r}")
+    return parsed
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the top-level IASim argument parser."""
     parser = IasimArgumentParser(
@@ -86,14 +98,37 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, help="set the MCP port")
     parser.add_argument("--max-agents", type=_positive_int, help="set the concurrent agent limit")
     parser.add_argument("--dev-open", action="store_true", help="disable auth on loopback only")
-    parser.add_argument("--min-agents", type=_positive_int, help="set the minimum agent count")
+    parser.add_argument(
+        "--min-agents",
+        type=_positive_int,
+        help="set the minimum agent count",
+    )
+    parser.add_argument(
+        "--tick-minutes", type=_positive_int, help="set minutes per simulation tick"
+    )
+    parser.add_argument("--turn-timeout-ms", type=_positive_int, help="set the turn deadline in ms")
+    parser.add_argument(
+        "--timeout-disconnects",
+        type=_positive_int,
+        help="set consecutive timeouts before an agent becomes absent",
+    )
+    parser.add_argument(
+        "--snapshot-every",
+        type=_positive_int,
+        help="set the snapshot cadence in ticks",
+    )
+    parser.add_argument(
+        "--autosave-every",
+        type=_non_negative_int,
+        help="set the autosave cadence in ticks (0 disables)",
+    )
     parser.add_argument("--no-autosave", action="store_true", help="disable automatic saves")
     parser.add_argument("--log-dir", type=Path, help="set the run log directory")
     parser.add_argument(
         "command",
         nargs="?",
         choices=("serve",),
-        help="use 'serve --headless' to start the MCP server",
+        help="'serve' is an alias of the default integrated startup",
     )
     session_source = parser.add_mutually_exclusive_group()
     session_source.add_argument("--load", type=Path, help="load a saved session")
@@ -145,54 +180,79 @@ def main(argv: Sequence[str] | None = None) -> int:
             return int(ExitCode.PERSISTENCE)
         return int(ExitCode.SUCCESS)
 
-    if args.command == "serve":
-        if not (args.headless or config.game.headless):
-            print(
-                "error: GUI startup is not available yet; use 'iasim serve --headless'",
-                file=sys.stderr,
-            )
-            return int(ExitCode.CONFIGURATION)
-        try:
-            if args.load is not None:
-                session = GameSession.load(
-                    args.load,
-                    token_path=args.load.parent / "agents.json",
-                    log_dir=run_dir,
-                    snapshot_every_ticks=config.logs.snapshot_every_ticks,
-                    turn_timeout_ms=config.game.turn_timeout_ms,
-                    timeout_disconnects=config.game.timeout_disconnects,
-                    weather_min_ticks=config.weather.weather_min_ticks,
-                    weather_max_ticks=config.weather.weather_max_ticks,
-                    usage_pricing=_usage_pricing(config),
-                )
-            else:
-                session = GameSession(
-                    seed,
-                    tick_minutes=config.game.tick_minutes,
-                    turn_timeout_ms=config.game.turn_timeout_ms,
-                    timeout_disconnects=config.game.timeout_disconnects,
-                    max_agents=config.game.max_agents,
-                    token_path=run_dir / "agents.json",
-                    weather_min_ticks=config.weather.weather_min_ticks,
-                    weather_max_ticks=config.weather.weather_max_ticks,
-                    usage_pricing=_usage_pricing(config),
-                    log_dir=run_dir,
-                    snapshot_every_ticks=config.logs.snapshot_every_ticks,
-                )
-            run_server(session, host=config.mcp.host, port=config.mcp.port)
-        except KeyboardInterrupt:
-            print("MCP server stopped")
-        except IasimError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return int(exc.exit_code)
-        except OSError as exc:
-            print(f"error: MCP server could not start: {exc}", file=sys.stderr)
-            return int(ExitCode.MCP)
-        except Exception as exc:
-            print(f"error: internal error: {exc}", file=sys.stderr)
-            return int(ExitCode.INTERNAL)
+    headless = args.headless or config.game.headless
+    server = None
+    session = None
+    try:
+        session = _create_session(config, seed, run_dir, args)
+        server = start_server(
+            session,
+            host=config.mcp.host,
+            port=config.mcp.port,
+            dev_open=config.mcp.dev_open,
+        )
+        print(f"MCP endpoint: {server.mcp_url}")
+        if server.warning is not None:
+            print(f"warning: {server.warning}")
+        print(f"agents file: {run_dir / 'agents.json'} (tokens are never printed)")
+        if headless:
+            print("headless mode: MCP only; press Ctrl+C to stop")
+            wait_for_shutdown()
+        else:
+            print("operator GUI: 160x45 | F1 ayuda | Q salir")
+            run_gui(session, capacity=config.game.max_agents)
+    except KeyboardInterrupt:
+        print("IASim stopped")
+    except IasimError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return int(exc.exit_code)
+    except OSError as exc:
+        print(f"error: MCP server could not start: {exc}", file=sys.stderr)
+        return int(ExitCode.MCP)
+    except Exception as exc:
+        print(f"error: internal error: {exc}", file=sys.stderr)
+        return int(ExitCode.INTERNAL)
+    finally:
+        if server is not None:
+            server.stop()
+        if session is not None and not session.is_finished:
+            with contextlib.suppress(IasimError):
+                session.finish()
 
     return int(ExitCode.SUCCESS)
+
+
+def _create_session(
+    config: IasimConfig,
+    seed: int,
+    run_dir: Path,
+    args: argparse.Namespace,
+) -> GameSession:
+    if args.load is not None:
+        return GameSession.load(
+            args.load,
+            token_path=args.load.parent / "agents.json",
+            log_dir=run_dir,
+            snapshot_every_ticks=config.logs.snapshot_every_ticks,
+            turn_timeout_ms=config.game.turn_timeout_ms,
+            timeout_disconnects=config.game.timeout_disconnects,
+            weather_min_ticks=config.weather.weather_min_ticks,
+            weather_max_ticks=config.weather.weather_max_ticks,
+            usage_pricing=_usage_pricing(config),
+        )
+    return GameSession(
+        seed,
+        tick_minutes=config.game.tick_minutes,
+        turn_timeout_ms=config.game.turn_timeout_ms,
+        timeout_disconnects=config.game.timeout_disconnects,
+        max_agents=config.game.max_agents,
+        token_path=run_dir / "agents.json",
+        weather_min_ticks=config.weather.weather_min_ticks,
+        weather_max_ticks=config.weather.weather_max_ticks,
+        usage_pricing=_usage_pricing(config),
+        log_dir=run_dir,
+        snapshot_every_ticks=config.logs.snapshot_every_ticks,
+    )
 
 
 def _build_overrides(args: argparse.Namespace) -> dict[str, Any]:
@@ -211,8 +271,18 @@ def _build_overrides(args: argparse.Namespace) -> dict[str, Any]:
         game["min_agents"] = args.min_agents
     if args.max_agents is not None:
         game["max_agents"] = args.max_agents
+    if args.tick_minutes is not None:
+        game["tick_minutes"] = args.tick_minutes
+    if args.turn_timeout_ms is not None:
+        game["turn_timeout_ms"] = args.turn_timeout_ms
+    if args.timeout_disconnects is not None:
+        game["timeout_disconnects"] = args.timeout_disconnects
+    if args.autosave_every is not None:
+        game["autosave_every_ticks"] = args.autosave_every
     if args.no_autosave:
         game["autosave_every_ticks"] = 0
+    if args.snapshot_every is not None:
+        logs["snapshot_every_ticks"] = args.snapshot_every
     if args.host is not None:
         mcp["host"] = args.host
     if args.port is not None:
