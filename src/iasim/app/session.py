@@ -1645,8 +1645,8 @@ class GameSession:
             self._log_event_locked("session_saved", path=str(saved.name))
             return saved
 
-    def submit_replay_action(self, action: Action) -> dict[str, Any]:
-        """Submit one recorded action while replaying a saved session."""
+    def submit_action(self, action: Action) -> dict[str, Any]:
+        """Submit one externally built action for replay, headless runs, or tests."""
         return self._submit(str(action.agent_id), action)
 
     def resolve_turn_by_deadline(self) -> None:

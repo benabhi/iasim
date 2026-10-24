@@ -79,7 +79,7 @@ def replay_saved_run(
             continue
         for action_payload in turn.actions:
             action = action_from_payload(action_payload)
-            result = session.submit_replay_action(action)
+            result = session.submit_action(action)
             if not result.get("ok"):
                 return ReplayReport(
                     matched=False,
