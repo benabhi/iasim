@@ -1533,7 +1533,7 @@ confirm_destructive = true
 | `--version` | Versión de IASim y del esquema MCP. |
 | `python -m iasim.reference_agent` | Lanza el agente de referencia. |
 
-La GUI que abre el comando principal es la vista completa definida en §5.3 y §5.5, no una versión reducida. `--headless` es la única variante sin ventana y conserva la misma simulación y contrato MCP. Cualquier valor de `[game]`, `[world]`, `[weather]`, `[mcp]`, `[ui]`, `[logs]` y `[debug]` puede fijarse en TOML; para opciones no listadas en la tabla se usa `--config`.
+La GUI que abre el comando principal es la vista completa definida en §5.3 y §5.5, no una versión reducida. `--headless` es la única variante sin ventana y conserva la misma simulación y contrato MCP. `--dev-open` solo se acepta en loopback y, para desarrollo, inyecta el token del primer slot en peticiones sin cabecera de autorización; no sustituye el flujo normal de tokens ni debe usarse en LAN. Cualquier valor de `[game]`, `[world]`, `[weather]`, `[mcp]`, `[ui]`, `[logs]` y `[debug]` puede fijarse en TOML; para opciones no listadas en la tabla se usa `--config`.
 
 ```bash
 iasim --config config/iasim.toml --host 0.0.0.0 --port 8765 --max-agents 8 --seed 42

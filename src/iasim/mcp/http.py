@@ -75,3 +75,25 @@ async def _payload_too_large(send: Send) -> None:
         }
     )
     await send({"type": "http.response.body", "body": body})
+
+
+class DevOpenAuthMiddleware:
+    """Inject the first session token for loopback dev-open requests.
+
+    This is an explicitly opt-in development convenience: it only exists when
+    the operator passed ``--dev-open`` on a loopback host, and it always maps
+    every unauthenticated request to slot 1, so multi-agent auth remains
+    exercised through the normal bearer-token path.
+    """
+
+    def __init__(self, app: ASGIApp, *, token: str) -> None:
+        self._app = app
+        self._header = (b"authorization", f"Bearer {token}".encode("ascii"))
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            headers = list(scope.get("headers", ()))
+            if not any(name.lower() == b"authorization" for name, _ in headers):
+                scope = dict(scope)
+                scope["headers"] = [*headers, self._header]
+        await self._app(scope, receive, send)

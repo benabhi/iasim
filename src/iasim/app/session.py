@@ -9,6 +9,7 @@ import os
 import secrets
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -287,6 +288,7 @@ class GameSession:
             tick_effect=self._apply_tick_effects,
         )
         self._names: dict[AgentId, str] = {}
+        self._recent_events: deque[dict[str, Any]] = deque(maxlen=200)
         self._last_results: dict[AgentId, dict[str, Any]] = {}
         self._slot_tokens: tuple[str, ...] = tuple(
             secrets.token_urlsafe(32) for _ in range(len(self._spawns))
@@ -339,6 +341,21 @@ class GameSession:
     def max_agents(self) -> int:
         """Return the number of configured agent slots."""
         return self._max_agents
+
+    @property
+    def turn_timeout_ms(self) -> int:
+        """Return the configured turn deadline in milliseconds."""
+        return self._turn_timeout_ms
+
+    @property
+    def timeout_disconnects(self) -> int:
+        """Return consecutive timeouts before an agent becomes absent."""
+        return self._timeout_disconnects
+
+    @property
+    def snapshot_every_ticks(self) -> int:
+        """Return the configured snapshot cadence in ticks."""
+        return self._snapshot_every_ticks
 
     @property
     def joined_agents(self) -> int:
@@ -874,6 +891,18 @@ class GameSession:
                 if entries
             }
 
+    def names_snapshot(self) -> dict[AgentId, str]:
+        """Return a copy of the joined agent names for the operator UI."""
+        with self._lock:
+            return dict(self._names)
+
+    def recent_events(self, limit: int = 50) -> tuple[dict[str, Any], ...]:
+        """Return the most recent presentation events without reading log files."""
+        with self._lock:
+            if limit <= 0:
+                return ()
+            return tuple(list(self._recent_events)[-limit:])
+
     def say(
         self,
         agent_id: str,
@@ -1083,14 +1112,16 @@ class GameSession:
         agent_id: str | None = None,
         **fields: Any,
     ) -> None:
+        event = {
+            "kind": kind,
+            "tick": self._state.tick if tick is None else tick,
+            "agent_id": agent_id,
+            **fields,
+        }
+        self._recent_events.append(event)
         if self._logs is None:
             return
-        self._logs.event(
-            kind=kind,
-            tick=self._state.tick if tick is None else tick,
-            agent_id=agent_id,
-            **fields,
-        )
+        self._logs.event(**event)
 
     def _log_action_locked(
         self,
