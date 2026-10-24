@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from iasim.domain.agents import Agent, AgentStatus
+from iasim.domain.alliances import Alliance, AllianceStatus
 from iasim.domain.climate import effective_vision
 from iasim.domain.clock import DayPhase, SimulationClock
 from iasim.domain.geometry import Position
@@ -15,10 +16,13 @@ from iasim.domain.mind import MindReport
 from iasim.domain.session import SessionState
 from iasim.domain.status import Condition, status_tags
 from iasim.domain.tiles import TileType
+from iasim.domain.trades import TradeStatus
 from iasim.domain.usage import AgentUsage, CostSource
+from iasim.domain.weather import WeatherKind
 from iasim.domain.world import StructureKind
 from iasim.ui import theme
 from iasim.ui.controls import KEY_GUIDE, STATUS_GUIDE
+from iasim.ui.panel import PANEL_TABS, TAB_LABELS, PanelState, RightPanelTab
 from iasim.world.tcod_fov import compute_fov
 
 SCREEN_WIDTH = 160
@@ -33,8 +37,8 @@ PANEL_CONTENT_WIDTH = SCREEN_WIDTH - PANEL_CONTENT_X
 BOTTOM_BAR_Y = 44
 
 BOTTOM_BAR = (
-    "[ESPACIO] Pausa │ [1-8/TAB] Agente │ [+/-] Vel │ [F1] Ayuda │ [F2] Agente │ "
-    "[F3] Mundo │ [F4] Log │ [F5] Replay │ [F6] Mapa │ [F9] Guardar │ [Q] Salir"
+    "[ESPACIO] Pausa│[1-8/TAB] Agente│[+/-] Vel│[ / ] Pestaña│[F1] Ayuda│"
+    "[F2] Agente│[F3] Mundo│[F4] Log│[F5] Replay│[F6] Mapa│[F9] Guardar│[Q] Salir"
 )
 
 HELP_FOOTER = "ESC volver │ F1 cerrar ayuda │ A ASCII │ Q/R requieren confirmación"
@@ -64,6 +68,14 @@ _COST_SOURCE_LABELS: dict[CostSource, str] = {
     CostSource.ESTIMATED: "estimado",
     CostSource.MIXED: "mixto",
     CostSource.UNKNOWN: "desconocido",
+}
+
+_WEATHER_LABELS: dict[WeatherKind, str] = {
+    WeatherKind.CLEAR: "DESPEJADO",
+    WeatherKind.CLOUDY: "NUBLADO",
+    WeatherKind.RAIN: "LLUVIA",
+    WeatherKind.STORM: "TORMENTA",
+    WeatherKind.FOG: "NIEBLA",
 }
 
 
@@ -200,6 +212,9 @@ def render_base_screen(
     usage: Mapping[AgentId, AgentUsage] | None = None,
     mind_reports: Mapping[AgentId, MindReport] | None = None,
     waiting_reason: str | None = None,
+    panel: PanelState | None = None,
+    messages: Sequence[str] = (),
+    betrayals: Sequence[str] = (),
 ) -> BaseScreen:
     """Render the deterministic base screen without mutating the session."""
     canvas = _Canvas()
@@ -219,6 +234,9 @@ def render_base_screen(
         usage=usage,
         mind_reports=mind_reports,
         waiting_reason=waiting_reason,
+        panel=panel,
+        messages=messages,
+        betrayals=betrayals,
     )
     _render_bottom_bar(canvas, ascii_mode)
     return canvas.to_screen()
@@ -379,7 +397,11 @@ def _render_panel(
     usage: Mapping[AgentId, AgentUsage] | None,
     mind_reports: Mapping[AgentId, MindReport] | None,
     waiting_reason: str | None,
+    panel: PanelState | None = None,
+    messages: Sequence[str] = (),
+    betrayals: Sequence[str] = (),
 ) -> None:
+    panel_state = panel if panel is not None else PanelState()
     canvas.fill(
         PANEL_X,
         0,
@@ -389,110 +411,291 @@ def _render_panel(
         bg=theme.PANEL_BG,
     )
     vertical = theme.ASCII_VERTICAL if ascii_mode else "│"
-    separator = (theme.ASCII_HORIZONTAL if ascii_mode else "─") * PANEL_CONTENT_WIDTH
-    for y in range(BOTTOM_BAR_Y):
-        canvas.put(PANEL_X, y, vertical, fg=theme.DIM, bg=theme.PANEL_BG)
+    horizontal = theme.ASCII_HORIZONTAL if ascii_mode else "─"
+    separator = horizontal * PANEL_CONTENT_WIDTH
+    for row in range(BOTTOM_BAR_Y):
+        canvas.put(PANEL_X, row, vertical, fg=theme.DIM, bg=theme.PANEL_BG)
 
     clock = SimulationClock(state.tick_minutes)
     clock.advance(state.tick)
-    phase = _PHASE_LABELS[clock.phase]
-    status_label = "PAUSA" if paused else "EN CURSO"
-    if waiting_reason is not None:
-        status_label = "ESPERANDO AGENTES"
-        if waiting_reason == "last_death":
-            status_label += " · ÚLTIMA MUERTE"
+    weather = state.weather
     _panel(
         canvas,
         0,
-        f"DÍA {clock.day} · {clock.hour:02d}:{clock.minute:02d} · {phase} · "
-        "DESPEJADO · 22 °C · VIENTO 0",
+        f"DÍA {clock.day} · {clock.hour:02d}:{clock.minute:02d} · "
+        f"{_PHASE_LABELS[clock.phase]} · {_WEATHER_LABELS[weather.kind]} · "
+        f"{weather.temperature_c:.0f} °C · VIENTO {weather.wind} · "
+        f"VIS {weather.visibility_factor:.2f}",
         fg=theme.WHITE,
         bold=True,
     )
     _panel(
         canvas,
         1,
-        f"{status_label} · VEL {speed}x · AGENTES {len(state.agents)}/{capacity}",
+        _status_line(
+            state,
+            paused=paused,
+            speed=speed,
+            capacity=capacity,
+            waiting_reason=waiting_reason,
+        ),
         fg=theme.CYAN,
     )
-    _panel(canvas, 2, separator, fg=theme.DIM)
-    _panel(canvas, 3, "AGENTES", fg=theme.CYAN, bold=True)
-
-    agents = list(state.agents)[:capacity]
     selected = _resolve_selected(state, selected_agent_id)
+    selected_report = None if selected is None else (mind_reports or {}).get(selected.agent_id)
+    _panel(
+        canvas,
+        2,
+        _tab_bar(
+            panel_state.tab,
+            events=len(events),
+            mind_reports=1 if selected_report is not None else 0,
+            ascii_mode=ascii_mode,
+        ),
+        fg=theme.CYAN,
+        bold=True,
+    )
+    _panel(canvas, 3, separator, fg=theme.DIM)
+
+    if panel_state.tab is RightPanelTab.SUMMARY:
+        _render_summary(
+            canvas,
+            state,
+            names,
+            selected=selected,
+            events=events,
+            usage=usage,
+            mind_reports=mind_reports,
+            messages=messages,
+            betrayals=betrayals,
+            ascii_mode=ascii_mode,
+        )
+        return
+
+    _render_compact_strip(canvas, 4, state, names, selected, ascii_mode, capacity)
+    _panel(canvas, 5, separator, fg=theme.DIM)
+    lines = _tab_lines(
+        panel_state.tab,
+        state,
+        names,
+        selected=selected,
+        report=selected_report,
+        events=events,
+        messages=messages,
+        betrayals=betrayals,
+        ascii_mode=ascii_mode,
+    )
+    _render_scroll_window(canvas, 6, lines, panel_state.scroll, ascii_mode)
+
+
+def _status_line(
+    state: SessionState,
+    *,
+    paused: bool,
+    speed: int,
+    capacity: int,
+    waiting_reason: str | None,
+) -> str:
+    status = "PAUSA" if paused else "EN CURSO"
+    if waiting_reason is not None:
+        status = "ESPERANDO AGENTES"
+        if waiting_reason == "last_death":
+            status += " · ÚLTIMA MUERTE"
+    occupied = len(state.agents)
+    alive = sum(1 for agent in state.agents if agent.is_alive)
+    free = max(0, capacity - occupied)
+    return (
+        f"{status} · VEL {speed}x · AGENTES {occupied}/{capacity} · {alive} vivos · {free} libres"
+    )
+
+
+def _tab_bar(
+    active: RightPanelTab,
+    *,
+    events: int,
+    mind_reports: int,
+    ascii_mode: bool,
+) -> str:
+    marker = ">" if ascii_mode else "◆"
+    parts: list[str] = []
+    for tab in PANEL_TABS:
+        label = TAB_LABELS[tab]
+        if tab is RightPanelTab.EVENTS:
+            label = f"{label} {events}"
+        elif tab is RightPanelTab.MIND:
+            label = f"{label} {mind_reports}"
+        prefix = marker if tab is active else " "
+        parts.append(f"{prefix} {label}")
+    return "   ".join(parts)
+
+
+def _render_compact_strip(
+    canvas: _Canvas,
+    y: int,
+    state: SessionState,
+    names: Mapping[AgentId, str],
+    selected: Agent | None,
+    ascii_mode: bool,
+    capacity: int,
+) -> None:
+    agents = list(state.agents)[:capacity]
+    pieces: list[str] = []
+    for index, agent in enumerate(agents, start=1):
+        name = names.get(agent.agent_id, str(agent.agent_id))
+        mark = "@" if agent.is_alive else ("X" if ascii_mode else "☠")
+        selected_mark = ">" if ascii_mode else "▶"
+        is_selected = selected is not None and agent.agent_id == selected.agent_id
+        prefix = selected_mark if is_selected else " "
+        pieces.append(f"{prefix}{index}{mark}{name}")
+    text = "  ".join(pieces) if pieces else "— sin agentes —"
+    _panel(canvas, y, text, fg=theme.WHITE, bold=True)
+
+
+def _render_summary(
+    canvas: _Canvas,
+    state: SessionState,
+    names: Mapping[AgentId, str],
+    *,
+    selected: Agent | None,
+    events: Sequence[str],
+    usage: Mapping[AgentId, AgentUsage] | None,
+    mind_reports: Mapping[AgentId, MindReport] | None,
+    messages: Sequence[str],
+    betrayals: Sequence[str],
+    ascii_mode: bool,
+) -> None:
+    separator = (theme.ASCII_HORIZONTAL if ascii_mode else "─") * PANEL_CONTENT_WIDTH
+    agents = list(state.agents)[:8]
     y = 4
+    _panel(canvas, y, "AGENTES", fg=theme.CYAN, bold=True)
+    y += 1
+    if not agents:
+        _panel(canvas, y, "— sin agentes —", fg=theme.DIM)
+        y += 1
     for index, agent in enumerate(agents, start=1):
         name = names.get(agent.agent_id, str(agent.agent_id))
         is_selected = selected is not None and agent.agent_id == selected.agent_id
         _panel(
             canvas,
             y,
-            _agent_line(index, agent, name, ascii_mode),
-            fg=theme.WHITE,
+            _agent_summary_line(
+                index,
+                agent,
+                name,
+                ascii_mode=ascii_mode,
+                selected=is_selected,
+                death=_death_detail(state, agent),
+            ),
             bg=theme.SELECTED_BG if is_selected else theme.PANEL_BG,
             bold=is_selected,
         )
         y += 1
-    if not agents:
-        _panel(canvas, y, "— sin agentes —", fg=theme.DIM)
-        y += 1
-
-    y += 1
     _panel(canvas, y, separator, fg=theme.DIM)
     y += 1
     if selected is None:
         _panel(canvas, y, "— sin agente seleccionado —", fg=theme.DIM)
         return
 
-    selected_name = names.get(selected.agent_id, str(selected.agent_id))
+    y = _render_selected_block(canvas, y, state, selected, names, ascii_mode)
+
+    selected_usage = usage.get(selected.agent_id) if usage is not None else None
+    if selected_usage is not None and selected_usage.entries and BOTTOM_BAR_Y - y >= 12:
+        y = _render_usage_block(canvas, y, selected_usage)
+
+    available = BOTTOM_BAR_Y - y
+    extra = max(0, available - 9)
+    mind_extra = min(3, extra)
+    extra -= mind_extra
+    env_extra = min(2, extra)
+    extra -= env_extra
+    relations_extra = min(2, extra)
+    extra -= relations_extra
+    events_extra = min(5, extra)
+
+    y = _render_mind_block(
+        canvas,
+        y,
+        selected,
+        None if mind_reports is None else mind_reports.get(selected.agent_id),
+        lines=1 + mind_extra,
+        separator=separator,
+    )
+    y = _render_environment_block(
+        canvas,
+        y,
+        state,
+        selected,
+        messages=messages,
+        lines=1 + env_extra,
+        separator=separator,
+    )
+    y = _render_relations_block(
+        canvas,
+        y,
+        state,
+        names,
+        selected,
+        messages=messages,
+        betrayals=betrayals,
+        lines=1 + relations_extra,
+        separator=separator,
+    )
+    _render_events_block(
+        canvas,
+        y,
+        events,
+        lines=2 + events_extra,
+        separator=separator,
+    )
+
+
+def _render_selected_block(
+    canvas: _Canvas,
+    y: int,
+    state: SessionState,
+    selected: Agent,
+    names: Mapping[AgentId, str],
+    ascii_mode: bool,
+) -> int:
+    name = names.get(selected.agent_id, str(selected.agent_id))
     _panel(
         canvas,
         y,
-        f"AGENTE SELECCIONADO · {selected_name} · {_agent_glyph(selected, ascii_mode)} · "
+        f"AGENTE SELECCIONADO · {name} · {_agent_glyph(selected, ascii_mode)} · "
         f"({selected.position.x}, {selected.position.y})",
         fg=theme.CYAN,
         bold=True,
     )
     y += 1
+    death = _death_detail(state, selected)
+    if not selected.is_alive:
+        _panel(canvas, y, f"Estado: MUERTO · {death}", fg=theme.RED)
+        y += 1
+        tags = _status_tags(selected)
+        _panel(canvas, y, f"ESTADOS: {' · '.join(tags) if tags else '—'}")
+        y += 1
+        _panel(canvas, y, "INVENTARIO", fg=theme.CYAN, bold=True)
+        y += 1
+        _panel(canvas, y, "— saqueado —", fg=theme.DIM)
+        return y + 1
+
     attributes = selected.attributes
     inventory = selected.inventory
-    _panel(
-        canvas,
-        y,
-        f"Salud   {_bar(attributes.health, 100, ascii_mode)} {attributes.health:>3.0f}",
+    rows = (
+        ("Salud   ", attributes.health, f"{attributes.health:>3.0f}"),
+        ("Hambre  ", attributes.hunger, f"{attributes.hunger:>3.0f}"),
+        ("Sed     ", attributes.thirst, f"{attributes.thirst:>3.0f}"),
+        ("Energía ", attributes.energy, f"{attributes.energy:>3.0f}"),
+        (
+            "Temp    ",
+            (attributes.body_temperature_c - 34.0) / 8.0 * 100.0,
+            f"{attributes.body_temperature_c:>4.1f}",
+        ),
+        ("Mojado  ", attributes.wetness, f"{attributes.wetness:>3.0f}"),
     )
-    y += 1
-    _panel(
-        canvas,
-        y,
-        f"Hambre  {_bar(attributes.hunger, 100, ascii_mode)} {attributes.hunger:>3.0f}",
-    )
-    y += 1
-    _panel(
-        canvas,
-        y,
-        f"Sed     {_bar(attributes.thirst, 100, ascii_mode)} {attributes.thirst:>3.0f}",
-    )
-    y += 1
-    _panel(
-        canvas,
-        y,
-        f"Energía {_bar(attributes.energy, 100, ascii_mode)} {attributes.energy:>3.0f}",
-    )
-    y += 1
-    temperature = attributes.body_temperature_c
-    _panel(
-        canvas,
-        y,
-        f"Temp    {_bar((temperature - 34.0) / 8.0 * 100, 100, ascii_mode)} {temperature:>4.1f} °C",
-    )
-    y += 1
-    _panel(
-        canvas,
-        y,
-        f"Mojado  {_bar(attributes.wetness, 100, ascii_mode)} {attributes.wetness:>3.0f}",
-    )
-    y += 1
+    for label, value, shown in rows:
+        _panel(canvas, y, f"{label} {_bar(value, 100, ascii_mode)} {shown}")
+        y += 1
     _panel(
         canvas,
         y,
@@ -513,89 +716,210 @@ def _render_panel(
         f"{inventory.max_weight_grams / 1000.0:.1f} kg · EQUIPO: {equipment}",
     )
     y += 1
-
+    _panel(canvas, y, "INVENTARIO", fg=theme.CYAN, bold=True)
     y += 1
+    items = [f"{stack.definition.item_id} x{stack.quantity}" for stack in inventory.stacks]
+    _panel(canvas, y, _clip(", ".join(items) or "— vacío —", PANEL_CONTENT_WIDTH))
+    return y + 1
+
+
+def _render_usage_block(canvas: _Canvas, y: int, usage: AgentUsage) -> int:
+    _panel(canvas, y, "USO IA (REPORTADO)", fg=theme.CYAN, bold=True)
+    y += 1
+    entry = usage.entries[-1]
+    effort = entry.reasoning_effort or "-"
+    _panel(
+        canvas,
+        y,
+        f"{entry.model} / {effort}: {entry.input_tokens} in / {entry.output_tokens} out",
+    )
+    y += 1
+    _panel(
+        canvas,
+        y,
+        f"TOTAL {usage.total_tokens} tokens - {_usage_cost_text(usage)}",
+    )
+    return y + 1
+
+
+def _render_mind_block(
+    canvas: _Canvas,
+    y: int,
+    selected: Agent,
+    report: MindReport | None,
+    *,
+    lines: int,
+    separator: str,
+) -> int:
     _panel(canvas, y, separator, fg=theme.DIM)
     y += 1
     _panel(canvas, y, "MENTE (REPORTADO)", fg=theme.CYAN, bold=True)
     y += 1
-    selected_mind = mind_reports.get(selected.agent_id) if mind_reports is not None else None
-    if selected_mind is None:
-        _panel(canvas, y, "— sin reporte —", fg=theme.DIM)
+    for line in _mind_lines(report, lines):
+        _panel(canvas, y, line)
         y += 1
-    else:
-        _panel(canvas, y, f"Intención: {selected_mind.intent}")
-        y += 1
-        _panel(canvas, y, f"Pensamiento: {selected_mind.thought}")
-        y += 1
-        if selected_mind.plan is not None:
-            _panel(canvas, y, f"Plan: {selected_mind.plan}")
-            y += 1
-        if selected_mind.confidence is not None:
-            _panel(canvas, y, f"Confianza: {selected_mind.confidence}")
-            y += 1
+    return y
 
-    selected_usage = usage.get(selected.agent_id) if usage is not None else None
-    if selected_usage is not None and selected_usage.entries:
-        _panel(canvas, y, separator, fg=theme.DIM)
-        y += 1
-        _panel(canvas, y, "USO IA (REPORTADO)", fg=theme.CYAN, bold=True)
-        y += 1
-        visible_entries = list(reversed(selected_usage.entries[-3:]))
-        for entry in visible_entries:
-            effort = entry.reasoning_effort or "-"
-            _panel(
-                canvas,
-                y,
-                f"{entry.model} / {effort}: {entry.input_tokens} in / {entry.output_tokens} out",
-            )
-            y += 1
-        if len(selected_usage.entries) > len(visible_entries):
-            _panel(
-                canvas,
-                y,
-                f"... +{len(selected_usage.entries) - len(visible_entries)} combinaciones",
-                fg=theme.DIM,
-            )
-            y += 1
-        _panel(
-            canvas,
-            y,
-            f"TOTAL {selected_usage.total_tokens} tokens - {_usage_cost_text(selected_usage)}",
-        )
-        y += 1
-    y += 1
 
+def _render_environment_block(
+    canvas: _Canvas,
+    y: int,
+    state: SessionState,
+    selected: Agent,
+    *,
+    messages: Sequence[str],
+    lines: int,
+    separator: str,
+) -> int:
     _panel(canvas, y, separator, fg=theme.DIM)
     y += 1
     _panel(canvas, y, "ENTORNO", fg=theme.CYAN, bold=True)
     y += 1
-    _panel(canvas, y, "Clima: DESPEJADO · Temp: 22 °C · Viento: 0 · Visibilidad: 1.00")
-    y += 1
-    fires = sum(1 for structure in state.structures if structure.kind is StructureKind.FIRE)
-    shelters = sum(1 for structure in state.structures if structure.kind is StructureKind.SHELTER)
-    corpses = sum(1 for agent in state.agents if agent.status is AgentStatus.DEAD)
-    _panel(canvas, y, f"Fuegos: {fires} · Refugios: {shelters} · Cadáveres: {corpses}")
-    y += 2
+    weather = state.weather
+    content = [
+        f"Clima: {_WEATHER_LABELS[weather.kind]} · Temp: "
+        f"{weather.temperature_c:.0f} °C · Viento: {weather.wind} · "
+        f"Visibilidad: {weather.visibility_factor:.2f}",
+        _structures_line(state),
+        f"Mensajes: {_last_message(messages, selected)}",
+    ]
+    for line in content[:lines]:
+        _panel(canvas, y, line)
+        y += 1
+    return y
 
+
+def _render_relations_block(
+    canvas: _Canvas,
+    y: int,
+    state: SessionState,
+    names: Mapping[AgentId, str],
+    selected: Agent,
+    *,
+    messages: Sequence[str],
+    betrayals: Sequence[str],
+    lines: int,
+    separator: str,
+) -> int:
+    _panel(canvas, y, separator, fg=theme.DIM)
+    y += 1
+    _panel(canvas, y, "RELACIONES", fg=theme.CYAN, bold=True)
+    y += 1
+    content = [
+        f"Alianzas: {_alliances_line(state, names)}",
+        f"Trueques: {_trades_line(state, names)}",
+        f"Traiciones: {_last_betrayal(betrayals) if betrayals else '—'}",
+    ]
+    for line in content[:lines]:
+        _panel(canvas, y, line)
+        y += 1
+    return y
+
+
+def _render_events_block(
+    canvas: _Canvas,
+    y: int,
+    events: Sequence[str],
+    *,
+    lines: int,
+    separator: str,
+) -> None:
     _panel(canvas, y, separator, fg=theme.DIM)
     y += 1
     _panel(canvas, y, "EVENTOS", fg=theme.CYAN, bold=True)
     y += 1
-    event_lines = list(events)[-2:] if events else ["— sin eventos —"]
-    for line in event_lines:
+    visible = list(events)[-lines:] if events else ["— sin eventos —"]
+    for line in visible:
         _panel(canvas, y, line, fg=theme.DIM)
         y += 1
-    y += 1
 
-    _panel(canvas, y, separator, fg=theme.DIM)
-    y += 1
-    _panel(canvas, y, "INVENTARIO", fg=theme.CYAN, bold=True)
-    y += 1
-    items = [f"{stack.definition.item_id} x{stack.quantity}" for stack in inventory.stacks[:2]]
-    for line in items or ["— vacío —"]:
-        _panel(canvas, y, line, fg=theme.DIM)
-        y += 1
+
+def _tab_lines(
+    tab: RightPanelTab,
+    state: SessionState,
+    names: Mapping[AgentId, str],
+    *,
+    selected: Agent | None,
+    report: MindReport | None,
+    events: Sequence[str],
+    messages: Sequence[str],
+    betrayals: Sequence[str],
+    ascii_mode: bool,
+) -> list[str]:
+    if tab is RightPanelTab.EVENTS:
+        if not events:
+            return ["— sin eventos —"]
+        return list(events)
+    name = "—" if selected is None else names.get(selected.agent_id, str(selected.agent_id))
+    if tab is RightPanelTab.MIND:
+        if report is None:
+            return [f"{name}: — sin reporte —"]
+        lines = [f"Intención: {report.intent}"]
+        lines.extend(_wrap(f"Pensamiento: {report.thought}", PANEL_CONTENT_WIDTH))
+        if report.plan is not None:
+            lines.extend(_wrap(f"Plan: {report.plan}", PANEL_CONTENT_WIDTH))
+        if report.confidence is not None:
+            lines.append(f"Confianza: {report.confidence}")
+        return lines
+    return _links_lines(state, names, selected, messages, betrayals, ascii_mode)
+
+
+def _links_lines(
+    state: SessionState,
+    names: Mapping[AgentId, str],
+    selected: Agent | None,
+    messages: Sequence[str],
+    betrayals: Sequence[str],
+    ascii_mode: bool,
+) -> list[str]:
+    lines: list[str] = ["INVENTARIO"]
+    if selected is not None:
+        inventory = selected.inventory
+        if inventory.stacks:
+            lines.extend(
+                f"  {stack.definition.item_id} x{stack.quantity}" for stack in inventory.stacks
+            )
+        else:
+            lines.append("  — vacío —")
+        lines.append("EQUIPO")
+        if selected.equipment.items:
+            lines.extend(f"  {slot.value}: {spec.name}" for slot, spec in selected.equipment.items)
+        else:
+            lines.append("  — sin equipo —")
+    else:
+        lines.append("  — sin agente seleccionado —")
+    lines.extend(("ALIANZAS", f"  {_alliances_line(state, names)}"))
+    lines.extend(("TRUEQUES", f"  {_trades_line(state, names)}"))
+    lines.append("MENSAJES")
+    if messages:
+        lines.extend(f"  {message}" for message in list(messages)[-6:])
+    else:
+        lines.append("  — sin mensajes —")
+    lines.append("TRAICIONES")
+    if betrayals:
+        lines.extend(f"  {betrayal}" for betrayal in list(betrayals)[-6:])
+    else:
+        lines.append("  — sin traiciones —")
+    return lines
+
+
+def _render_scroll_window(
+    canvas: _Canvas,
+    y: int,
+    lines: Sequence[str],
+    scroll: int,
+    ascii_mode: bool,
+) -> None:
+    rows = BOTTOM_BAR_Y - 1 - y
+    start = max(0, min(scroll, max(0, len(lines) - rows)))
+    for offset, line in enumerate(lines[start : start + rows]):
+        _panel(canvas, y + offset, line)
+    end = min(len(lines), start + rows)
+    if lines:
+        indicator = f"{start + 1}-{end} de {len(lines)} · [ ] pestaña · ↑↓ PgUp/PgDn"
+    else:
+        indicator = "— vacío —"
+    _panel(canvas, BOTTOM_BAR_Y - 1, indicator, fg=theme.DIM)
 
 
 def _render_bottom_bar(canvas: _Canvas, ascii_mode: bool) -> None:
@@ -618,11 +942,135 @@ def _panel(
     canvas.put(
         PANEL_CONTENT_X,
         y,
-        text[:PANEL_CONTENT_WIDTH],
+        _clip(text, PANEL_CONTENT_WIDTH),
         fg=fg,
         bg=bg,
         bold=bold,
     )
+
+
+def _clip(text: str, width: int) -> str:
+    """Truncate one panel line by width, marking the cut with an ellipsis."""
+    if width <= 0:
+        return ""
+    if len(text) <= width:
+        return text
+    return text[: width - 1] + "…"
+
+
+def _wrap(text: str, width: int, *, max_lines: int = 40) -> list[str]:
+    """Wrap text to the panel width, marking a truncated tail."""
+    if width <= 0:
+        return []
+    words = text.split()
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = word if not current else f"{current} {word}"
+        if len(candidate) <= width:
+            current = candidate
+            continue
+        if current:
+            lines.append(current)
+        current = word
+        if len(lines) >= max_lines:
+            break
+    if current and len(lines) < max_lines:
+        lines.append(current)
+    if lines and len(lines) == max_lines and " ".join(lines) != text:
+        lines[-1] = _clip(lines[-1] + "…", width)
+    return lines
+
+
+def _agent_summary_line(
+    index: int,
+    agent: Agent,
+    name: str,
+    *,
+    ascii_mode: bool,
+    selected: bool,
+    death: str | None,
+) -> str:
+    marker = ">" if ascii_mode else "▶"
+    prefix = f"{marker if selected else ' '} {index} {'@' if agent.is_alive else '☠'} {name}"
+    if ascii_mode:
+        prefix = f"{marker if selected else ' '} {index} {'@' if agent.is_alive else 'X'} {name}"
+    if not agent.is_alive:
+        return f"{prefix} ☠ {death or 'muerto'}"
+    if agent.status is AgentStatus.ABSENT:
+        return f"{prefix} … ausente"
+    attributes = agent.attributes
+    health_symbol = "H" if ascii_mode else "♥"
+    tags = _status_tags(agent)
+    tag_text = f" [{' · '.join(tags)}]" if tags else ""
+    return (
+        f"{prefix} {health_symbol}{attributes.health:>3.0f} "
+        f"H{attributes.hunger:>3.0f} S{attributes.thirst:>3.0f} "
+        f"E{attributes.energy:>3.0f}{tag_text}"
+    )
+
+
+def _death_detail(state: SessionState, agent: Agent) -> str | None:
+    for corpse in state.corpses:
+        if corpse.agent_id == agent.agent_id:
+            killer = f" por {corpse.killer_id}" if corpse.killer_id is not None else ""
+            return f"muerto por {corpse.cause}{killer}"
+    if agent.status is AgentStatus.DEAD:
+        return "muerto"
+    return None
+
+
+def _mind_lines(report: MindReport | None, limit: int) -> list[str]:
+    if report is None:
+        return ["— sin reporte —"]
+    lines = [f"Intención: {report.intent}", f"Pensamiento: {report.thought}"]
+    if report.plan is not None:
+        lines.append(f"Plan: {report.plan}")
+    if report.confidence is not None:
+        lines.append(f"Confianza: {report.confidence}")
+    return lines[: max(1, limit)]
+
+
+def _structures_line(state: SessionState) -> str:
+    fires = sum(1 for structure in state.structures if structure.kind is StructureKind.FIRE)
+    shelters = sum(1 for structure in state.structures if structure.kind is StructureKind.SHELTER)
+    corpses = sum(1 for agent in state.agents if not agent.is_alive)
+    return f"Fuegos: {fires} · Refugios: {shelters} · Cadáveres: {corpses}"
+
+
+def _last_message(messages: Sequence[str], selected: Agent) -> str:
+    if not messages:
+        return "—"
+    return messages[-1]
+
+
+def _alliances_line(
+    state: SessionState,
+    names: Mapping[AgentId, str],
+) -> str:
+    active = [alliance for alliance in state.alliances if alliance.status is AllianceStatus.ACTIVE]
+    if not active:
+        return "—"
+    return " · ".join(_alliance_text(alliance, names) for alliance in active[:2])
+
+
+def _alliance_text(alliance: Alliance, names: Mapping[AgentId, str]) -> str:
+    first, second = alliance.members
+    return f"{names.get(first, str(first))}-{names.get(second, str(second))}"
+
+
+def _trades_line(state: SessionState, names: Mapping[AgentId, str]) -> str:
+    open_trades = [trade for trade in state.trades if trade.status is TradeStatus.OPEN]
+    if not open_trades:
+        return "—"
+    trade = open_trades[0]
+    proposer = names.get(trade.proposer_id, str(trade.proposer_id))
+    target = names.get(trade.target_id, str(trade.target_id))
+    return f"{len(open_trades)} pendientes · {proposer}→{target}"
+
+
+def _last_betrayal(betrayals: Sequence[str]) -> str:
+    return betrayals[-1] if betrayals else "—"
 
 
 def _resolve_selected(
@@ -644,18 +1092,6 @@ def _agent_glyph(agent: Agent, ascii_mode: bool = False) -> str:
     if agent.status is AgentStatus.SLEEPING:
         return "z"
     return "@"
-
-
-def _agent_line(index: int, agent: Agent, name: str, ascii_mode: bool = False) -> str:
-    if agent.status is AgentStatus.DEAD:
-        return f"{index:>1} {_agent_glyph(agent, ascii_mode)} {name:<8} — muerta"
-    attributes = agent.attributes
-    health_symbol = "H" if ascii_mode else "♥"
-    return (
-        f"{index:>1} {_agent_glyph(agent, ascii_mode)} {name:<8} "
-        f"{health_symbol}{attributes.health:>3.0f} H{attributes.hunger:>3.0f} "
-        f"S{attributes.thirst:>3.0f} E{attributes.energy:>3.0f}"
-    )
 
 
 def _status_tags(agent: Agent) -> list[str]:

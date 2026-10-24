@@ -31,6 +31,18 @@ _KEY_BY_NAME: dict[str, str] = {
     "F10": "f10",
     "F11": "f11",
     "F12": "f12",
+    "UP": "up",
+    "DOWN": "down",
+    "LEFT": "left",
+    "RIGHT": "right",
+    "PAGEUP": "pageup",
+    "PAGEDOWN": "pagedown",
+    "HOME": "home",
+    "END": "end",
+    "LEFTBRACKET": "[",
+    "RIGHTBRACKET": "]",
+    "LBRACKET": "[",
+    "RBRACKET": "]",
 }
 
 

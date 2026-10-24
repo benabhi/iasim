@@ -9,10 +9,11 @@ or restart.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
 from iasim.domain.identifiers import AgentId
+from iasim.ui.panel import PANEL_PAGE, PANEL_STEP, PanelState, RightPanelTab
 
 SPEEDS: tuple[int, ...] = (1, 2, 4, 8)
 
@@ -21,12 +22,15 @@ KEY_GUIDE: tuple[tuple[str, str], ...] = (
     ("1-8", "Seleccionar agente"),
     ("TAB", "Siguiente agente"),
     ("+ / -", "Cambiar velocidad"),
+    ("[ / ]", "Cambiar pestaña del panel"),
+    ("↑ / ↓", "Desplazar la pestaña activa"),
+    ("PgUp/PgDn", "Desplazar una página"),
     ("F1", "Abrir / cerrar ayuda"),
     ("A", "Alternar ASCII"),
     ("V", "Alternar foco FOV / mapa completo"),
     ("Q", "Salir (confirmar)"),
     ("R", "Reiniciar (confirmar)"),
-    ("ESC", "Cancelar / cerrar ayuda"),
+    ("ESC", "Cancelar / cerrar ayuda o volver a RESUMEN"),
 )
 
 STATUS_GUIDE: tuple[tuple[str, str], ...] = (
@@ -61,6 +65,7 @@ class UiState:
     pending_confirmation: UiCommand | None = None
     quit_requested: bool = False
     restart_requested: bool = False
+    panel: PanelState = field(default_factory=PanelState)
 
 
 def handle_key(
@@ -84,6 +89,33 @@ def handle_key(
         if normalized in {"f1", "esc"}:
             return replace(state, help_open=False)
         return state
+
+    if normalized == "esc":
+        if state.panel.tab is not RightPanelTab.SUMMARY:
+            return replace(state, panel=state.panel.with_tab(RightPanelTab.SUMMARY))
+        return state
+
+    if normalized in {"[", "leftbracket", "lbrace"}:
+        return replace(state, panel=state.panel.cycle(-1))
+
+    if normalized in {"]", "rightbracket", "rbrace"}:
+        return replace(state, panel=state.panel.cycle(1))
+
+    if normalized in {"up", "down"}:
+        delta = -PANEL_STEP if normalized == "up" else PANEL_STEP
+        return replace(state, panel=state.panel.scrolled(delta))
+
+    if normalized in {"pageup", "pgup", "prior"}:
+        return replace(state, panel=state.panel.scrolled(-PANEL_PAGE))
+
+    if normalized in {"pagedown", "pgdn", "next"}:
+        return replace(state, panel=state.panel.scrolled(PANEL_PAGE))
+
+    if normalized == "home":
+        return replace(state, panel=replace(state.panel, scroll=0))
+
+    if normalized == "end":
+        return replace(state, panel=state.panel.scrolled(10_000))
 
     if normalized == "space":
         return replace(state, paused=not state.paused)
