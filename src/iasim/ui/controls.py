@@ -27,6 +27,7 @@ KEY_GUIDE: tuple[tuple[str, str], ...] = (
     ("PgUp/PgDn", "Desplazar una página"),
     ("F1", "Abrir / cerrar ayuda"),
     ("F2", "Abrir / cerrar ficha completa del agente"),
+    ("F3", "Abrir / cerrar resumen del mundo"),
     ("A", "Alternar ASCII"),
     ("V", "Alternar foco FOV / mapa completo"),
     ("W", "Alternar capa de clima"),
@@ -59,6 +60,7 @@ class UiView(StrEnum):
 
     NONE = "none"
     AGENT_SHEET = "agent_sheet"
+    WORLD_SUMMARY = "world_summary"
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +113,13 @@ def handle_key(
     if normalized == "f2":
         view = UiView.NONE if state.view is UiView.AGENT_SHEET else UiView.AGENT_SHEET
         return replace(state, view=view)
+
+    if normalized == "f3":
+        view = UiView.NONE if state.view is UiView.WORLD_SUMMARY else UiView.WORLD_SUMMARY
+        return replace(state, view=view)
+
+    if normalized == "enter" and state.view is UiView.WORLD_SUMMARY:
+        return replace(state, view=UiView.AGENT_SHEET)
 
     if normalized in {"[", "leftbracket", "lbrace"}:
         return replace(state, panel=state.panel.cycle(-1))
