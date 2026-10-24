@@ -94,8 +94,10 @@ from iasim.domain.weather import (
     advance_weather,
     apply_weather_wetness,
 )
+from iasim.domain.world import Structure
 from iasim.errors import PersistenceError
 from iasim.persistence.logs import SessionLogs
+from iasim.persistence.metrics import MetricsRecorder
 from iasim.persistence.replay import write_replay
 from iasim.persistence.state import (
     SNAPSHOTS_DIRNAME,
@@ -242,6 +244,9 @@ class GameSession:
         self._replay_turns: list[dict[str, Any]] = []
         self._replay_start_hash: str | None = None
         self._replay_start_tick = 0
+        self._metrics = MetricsRecorder()
+        self._pre_resolution_health: dict[AgentId, int] = {}
+        self._pre_resolution_inventory: dict[AgentId, dict[str, int]] = {}
         self._logged_corpse_ids: set[str] = set()
         self._mind_reports: dict[AgentId, MindReport] = {}
         self._mind_tick: dict[AgentId, int] = {}
@@ -444,6 +449,7 @@ class GameSession:
                 clock=self._engine.clock,
             )
             self._names[agent_id] = clean_name
+            self._metrics.ensure(agent_id, clean_name)
             self._usage.pop(agent_id, None)
             self._said_tick.pop(agent_id, None)
             self._mind_reports.pop(agent_id, None)
@@ -543,7 +549,9 @@ class GameSession:
             agent = self._find_agent(agent_id)
             if target not in self._names or agent is None:
                 return self._error("NOT_YOUR_TURN", "agent is not joined")
-            return self._observation(self._note_response_locked(agent))
+            updated = self._note_response_locked(agent)
+            self._metrics.record_observation(agent.agent_id, self._wall_clock())
+            return self._observation(updated)
 
     def recipes(self) -> dict[str, Any]:
         """Return every known crafting recipe with its requirements."""
@@ -1037,6 +1045,7 @@ class GameSession:
                 return self._error("INTERNAL_ERROR", f"cannot record mind report: {exc}")
             self._mind_reports[target] = report
             self._mind_tick[target] = tick
+            self._metrics.record_mind_report(target)
             return {
                 "ok": True,
                 "schema_version": SCHEMA_VERSION,
@@ -1119,6 +1128,7 @@ class GameSession:
                 arguments=action.payload_dict(),
                 error=code,
             )
+        self._metrics.record_action_submitted(action.agent_id, failed=True)
         return self._error(code, message, tick=action.tick, details=details)
 
     def _write_session_metadata_locked(self) -> None:
@@ -1183,6 +1193,11 @@ class GameSession:
                 agent_id=str(corpse.agent_id),
                 cause=corpse.cause,
                 killer_id=(None if corpse.killer_id is None else str(corpse.killer_id)),
+            )
+            self._metrics.record_death(
+                corpse.agent_id,
+                cause=corpse.cause,
+                killer_id=corpse.killer_id,
             )
 
     def move(self, agent_id: str, tick: int, dx: int, dy: int) -> dict[str, Any]:
@@ -1781,6 +1796,8 @@ class GameSession:
 
             self._timeouts.pop(target, None)
             self._pending_actions[target] = action
+            self._metrics.record_action_submitted(target, failed=False)
+            self._metrics.record_action_latency(target, self._wall_clock())
             if self._turn_deadline is None:
                 self._turn_deadline = self._wall_clock() + self._turn_timeout_ms / 1000.0
             self._resolve_if_complete()
@@ -1806,6 +1823,7 @@ class GameSession:
 
         self._turn_deadline = None
         self._capture_replay_start_locked()
+        self._capture_pre_resolution_locked()
         result = self._engine.resolve()
         self._state = self._engine.state
         self._record_result(result)
@@ -1834,6 +1852,7 @@ class GameSession:
                 continue
             timeouts = self._timeouts.get(agent.agent_id, 0) + 1
             self._timeouts[agent.agent_id] = timeouts
+            self._metrics.record_timeout(agent.agent_id)
             self._log_event_locked(
                 "timeout",
                 agent_id=str(agent.agent_id),
@@ -1857,12 +1876,25 @@ class GameSession:
                     consecutive=self._timeouts[agent_id],
                 )
 
+        self._capture_pre_resolution_locked()
         result = self._engine.resolve()
         self._state = self._engine.state
         self._record_result(result, resolved_by_deadline=True)
         self._update_phase_locked()
         self._maybe_snapshot_locked()
         self._condition.notify_all()
+
+    def _capture_pre_resolution_locked(self) -> None:
+        """Capture health and inventory so damage and gathering can be derived."""
+        self._pre_resolution_health = {
+            agent.agent_id: agent.attributes.health_centi for agent in self._state.agents
+        }
+        self._pre_resolution_inventory = {
+            agent.agent_id: {
+                stack.definition.item_id: stack.quantity for stack in agent.inventory.stacks
+            }
+            for agent in self._state.agents
+        }
 
     def _maybe_snapshot_locked(self) -> None:
         """Write a periodic snapshot when the tick is due."""
@@ -1980,6 +2012,7 @@ class GameSession:
     ) -> None:
         recorded: dict[AgentId, dict[str, Any]] = {}
         resolved_actions: list[dict[str, Any]] = []
+        gather_agents: set[AgentId] = set()
         for event in result.events:
             self._record_social_event_locked(event)
             # The first event of an agent carries its primary action outcome;
@@ -2010,6 +2043,12 @@ class GameSession:
                 "withdrawn",
                 "declined",
             }
+            self._record_action_metrics_locked(
+                event,
+                pending=pending,
+                success=success,
+                gather_agents=gather_agents,
+            )
             recorded[event.agent_id] = {
                 "tick": result.tick,
                 "action": event.kind.value,
@@ -2020,6 +2059,8 @@ class GameSession:
                 event,
                 status="success" if success else "rejected",
             )
+        self._record_gather_metrics_locked(gather_agents)
+        self._record_damage_metrics_locked()
         if self._log_dir is not None:
             self._replay_turns.append(
                 {
@@ -2031,6 +2072,88 @@ class GameSession:
             )
         self._last_results.update(recorded)
         self._pending_actions.clear()
+
+    def _record_action_metrics_locked(
+        self,
+        event: TurnEvent,
+        *,
+        pending: Action | None,
+        success: bool,
+        gather_agents: set[AgentId],
+    ) -> None:
+        """Record the metrics carried by one primary turn outcome."""
+        executed = success or event.outcome in {"hit", "killed", "missed"}
+        if not executed:
+            self._metrics.record_action_failed(event.agent_id)
+        payload = {} if pending is None else pending.payload_dict()
+        if event.kind in {ActionKind.MOVE, ActionKind.MOVE_TO} and success:
+            self._metrics.record_distance(event.agent_id)
+        elif event.kind is ActionKind.GATHER and success:
+            gather_agents.add(event.agent_id)
+        elif event.kind is ActionKind.CRAFT and success:
+            recipe_id = payload.get("recipe_id")
+            if isinstance(recipe_id, str) and recipe_id:
+                self._metrics.record_craft(event.agent_id, recipe_id)
+        elif event.kind is ActionKind.BUILD and success:
+            structure = self._structure_at(payload)
+            if structure is not None:
+                self._metrics.record_build(event.agent_id, structure.kind.value)
+        elif event.kind in {ActionKind.ATTACK, ActionKind.THROW}:
+            self._metrics.record_attack(event.agent_id)
+            self._record_attack_damage_locked(event.agent_id, payload)
+
+    def _record_attack_damage_locked(
+        self,
+        attacker: AgentId,
+        payload: Mapping[str, Any],
+    ) -> None:
+        target_raw = payload.get("target_id")
+        if not isinstance(target_raw, str) or not target_raw:
+            return
+        previous = self._pre_resolution_health.get(AgentId(target_raw))
+        target = self._find_agent(target_raw)
+        if previous is None or target is None:
+            return
+        dealt = max(0, previous - target.attributes.health_centi)
+        if dealt:
+            self._metrics.record_damage(attacker, dealt=dealt)
+
+    def _structure_at(self, payload: Mapping[str, Any]) -> Structure | None:
+        x = payload.get("x")
+        y = payload.get("y")
+        if type(x) is not int or type(y) is not int:
+            return None
+        for structure in self._state.structures:
+            if structure.position.x == x and structure.position.y == y:
+                return structure
+        return None
+
+    def _record_damage_metrics_locked(self) -> None:
+        for agent in self._state.agents:
+            previous = self._pre_resolution_health.get(agent.agent_id)
+            if previous is None:
+                continue
+            taken = max(0, previous - agent.attributes.health_centi)
+            if taken:
+                self._metrics.record_damage(agent.agent_id, taken=taken)
+        self._pre_resolution_health = {}
+        self._pre_resolution_inventory = {}
+
+    def _record_gather_metrics_locked(self, gather_agents: set[AgentId]) -> None:
+        for agent_id in gather_agents:
+            agent = self._find_agent(str(agent_id))
+            if agent is None:
+                continue
+            previous = self._pre_resolution_inventory.get(agent_id, {})
+            for stack in agent.inventory.stacks:
+                before = previous.get(stack.definition.item_id, 0)
+                gained = stack.quantity - before
+                if gained > 0:
+                    self._metrics.record_gather(
+                        agent_id,
+                        stack.definition.item_id,
+                        gained,
+                    )
 
     def _capture_replay_start_locked(self) -> None:
         """Record the state hash that the first replay turn starts from."""
@@ -2097,6 +2220,17 @@ class GameSession:
         """Return the ordered social event log for the operator and the logs."""
         with self._lock:
             return self._social.events
+
+    def metrics_snapshot(self) -> dict[str, Any]:
+        """Return the aggregated per-agent and per-session MVP metrics."""
+        with self._lock:
+            final_hash = self._final_state_hash or canonical_state_hash(self._state)
+            return self._metrics.snapshot(
+                state=self._state,
+                names=dict(self._names),
+                final_hash=final_hash,
+                social=self._social.snapshot(),
+            )
 
     def _resource_ids_at(self, state: SessionState, position: Position) -> tuple[str, ...]:
         tile = state.world.tile_at(position)
@@ -2377,7 +2511,9 @@ class GameSession:
             trades=expire_trades(state.trades, tick=state.tick + 1),
         )
         self._advance_chat_locked(state.tick + 1)
-        return self._update_memory_locked(state)
+        final_state = self._update_memory_locked(state)
+        self._metrics.record_tick(final_state.agents)
+        return final_state
 
     def _finalize_deaths_locked(self, state: SessionState) -> SessionState:
         known = {corpse.agent_id for corpse in state.corpses}
