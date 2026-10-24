@@ -32,6 +32,7 @@ class ReplayTurn:
     state_hash: str
     resolved_by: str
     actions: tuple[dict[str, Any], ...]
+    minds: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +123,7 @@ def _turn_from_payload(payload: Mapping[str, Any]) -> ReplayTurn:
     if resolved_by not in {"actions", "deadline"}:
         raise ValueError(f"unknown resolved_by value {resolved_by!r}")
     actions = tuple(dict(action) for action in payload["actions"])
+    minds = tuple(dict(report) for report in payload.get("minds", ()))
     state_hash = str(payload["state_hash"])
     if not state_hash:
         raise ValueError("state_hash must not be empty")
@@ -130,4 +132,5 @@ def _turn_from_payload(payload: Mapping[str, Any]) -> ReplayTurn:
         state_hash=state_hash,
         resolved_by=resolved_by,
         actions=actions,
+        minds=minds,
     )

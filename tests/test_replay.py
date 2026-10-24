@@ -7,9 +7,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from iasim.app.replay import replay_saved_run
+from iasim.app.replay import ReplayFrame, replay_frames, replay_saved_run
 from iasim.app.session import GameSession
-from iasim.persistence.replay import ReplayError, read_replay
+from iasim.domain.hashing import canonical_state_hash
+from iasim.persistence.replay import ReplayError, ReplayTurn, read_replay
 
 
 def _session(
@@ -203,6 +204,101 @@ class ReplayRecordTests(unittest.TestCase):
             self.assertEqual(report.start_tick, 1)
             self.assertEqual(report.ticks_replayed, 1)
             self.assertEqual(report.final_hash, summary["state_hash"])
+
+
+class ReplayFrameTests(unittest.TestCase):
+    def _recorded_session(self, path: Path) -> GameSession:
+        session, first, second = _session(path)
+        session.report_mind(
+            first,
+            0,
+            intent="Buscar agua",
+            thought="Tengo sed",
+            plan="Ir al río",
+        )
+        session.move(first, 0, 0, 1)
+        session.wait(second, 0)
+        session.wait(first, 1)
+        session.wait(second, 1)
+        session.finish()
+        return session
+
+    def test_frames_reproduce_recorded_states_actions_and_minds(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            session = self._recorded_session(path)
+
+            frames = replay_frames(path / "replay.json")
+
+            self.assertIsInstance(frames[0], ReplayFrame)
+            self.assertEqual([frame.tick for frame in frames], [0, 1, 2])
+            self.assertEqual(frames[0].actions, ())
+            self.assertEqual(
+                set(frames[1].actions),
+                {"move", "wait"},
+            )
+            self.assertEqual(
+                canonical_state_hash(frames[2].state),
+                session.final_state_hash,
+            )
+            self.assertEqual(
+                [report.intent for report in frames[1].minds],
+                ["Buscar agua"],
+            )
+            self.assertEqual(
+                [report.plan for report in frames[1].minds],
+                ["Ir al río"],
+            )
+
+    def test_frames_are_deterministic_and_do_not_touch_live_agents(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            session = self._recorded_session(path)
+
+            first = replay_frames(path / "replay.json")
+            second = replay_frames(path / "replay.json")
+
+            self.assertEqual(
+                [canonical_state_hash(frame.state) for frame in first],
+                [canonical_state_hash(frame.state) for frame in second],
+            )
+            self.assertEqual(
+                [frame.actions for frame in first],
+                [frame.actions for frame in second],
+            )
+            self.assertTrue(session.is_finished)
+            self.assertEqual(
+                [frame.tick for frame in first],
+                list(range(len(first))),
+            )
+
+    def test_a_divergent_record_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            self._recorded_session(path)
+            replay_path = path / "replay.json"
+            data = json.loads(replay_path.read_text(encoding="utf-8"))
+            moved = next(
+                action for action in data["turns"][0]["actions"] if action["kind"] == "move"
+            )
+            moved["payload"] = [["dx", 0], ["dy", -1]]
+            replay_path.write_text(json.dumps(data), encoding="utf-8")
+
+            with self.assertRaises(ReplayError):
+                replay_frames(replay_path)
+
+
+class ReplayTurnParsingTests(unittest.TestCase):
+    def test_turns_without_minds_still_load(self) -> None:
+        turn = ReplayTurn(
+            tick=1,
+            state_hash="a" * 64,
+            resolved_by="actions",
+            actions=(),
+            minds=(),
+        )
+
+        self.assertEqual(turn.minds, ())
 
 
 if __name__ == "__main__":

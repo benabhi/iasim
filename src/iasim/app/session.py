@@ -2078,6 +2078,13 @@ class GameSession:
                     "state_hash": canonical_state_hash(self._state),
                     "resolved_by": ("deadline" if resolved_by_deadline else "actions"),
                     "actions": resolved_actions,
+                    "minds": [
+                        report.as_dict()
+                        for report in sorted(
+                            self._mind_reports.values(),
+                            key=lambda item: str(item.agent_id),
+                        )
+                    ],
                 }
             )
         self._last_results.update(recorded)
