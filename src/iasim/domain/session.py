@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from iasim.domain.agents import Agent
+from iasim.domain.alliances import Alliance
 from iasim.domain.corpse import Corpse
 from iasim.domain.items import GroundItem
 from iasim.domain.resources import ResourceNode
@@ -29,6 +30,7 @@ class SessionState:
     weather: WeatherState = field(default_factory=WeatherState)
     resource_nodes: tuple[ResourceNode, ...] = ()
     corpses: tuple[Corpse, ...] = ()
+    alliances: tuple[Alliance, ...] = ()
 
     def __post_init__(self) -> None:
         if self.seed < 0:
@@ -77,3 +79,9 @@ class SessionState:
         for corpse in self.corpses:
             if not self.world.contains(corpse.position):
                 raise ValueError(f"corpse {corpse.corpse_id!r} is outside the world")
+
+        alliance_ids = [alliance.alliance_id for alliance in self.alliances]
+        if len(alliance_ids) != len(set(alliance_ids)):
+            raise ValueError("session must not contain duplicate alliance ids")
+        if alliance_ids != sorted(alliance_ids):
+            raise ValueError("session alliances must be sorted by alliance id")

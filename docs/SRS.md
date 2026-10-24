@@ -474,6 +474,10 @@ energia  -= 0.25 × factor_actividad
 - Los pensamientos reportados **no** se comparten automáticamente con otros agentes; el operador los ve, los demás solo ven lo que el agente decide comunicar.
 - Alianzas:
   - `offer_alliance`, `accept_alliance`, `break_alliance`;
+  - `offer_alliance` y `accept_alliance` requieren radio social 8; `break_alliance` no requiere cercanía;
+  - la oferta no vence: queda visible para ambos hasta que se acepta, se retira o se rechaza;
+  - `break_alliance` sobre una oferta pendiente la retira (el proponente) o la rechaza (el destinatario);
+  - cada pareja de agentes tiene como máximo una alianza vigente;
   - estado visible en la UI;
   - no imponen cooperación ni impiden atacar;
   - atacar a un aliado se registra como traición para métricas.
@@ -1344,6 +1348,7 @@ Campos obligatorios:
 - `time`, `agent`, `environment`.
 - `perception.visible`, `perception.memory_updates`, `perception.agents`, `perception.messages`.
 - `inventory` y `available_actions`.
+- `social` con las alianzas activas del agente y las ofertas pendientes que lo involucran (`alliance_id`, `from`, `to`, `tick`, `mine`); la relación de un agente visible es `ally` solo si la alianza está aceptada.
 - `last_action_result` si existe.
 
 El uso de IA reportado no forma parte de la observación del agente ni del estado canónico de la simulación; se acumula para el operador y se descarta al desconectarse el agente.

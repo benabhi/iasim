@@ -18,6 +18,14 @@ from typing import Any
 from iasim.crafting import Catalog, load_catalog
 from iasim.domain.actions import Action, ActionKind
 from iasim.domain.agents import Agent, AgentProfile, AgentStatus
+from iasim.domain.alliance_actions import alliance_resolvers
+from iasim.domain.alliances import (
+    active_alliances,
+    drop_agent_alliances,
+    drop_departed_alliances,
+    is_allied,
+    pending_offers,
+)
 from iasim.domain.chat import (
     MAX_CHAT_MESSAGE_LENGTH,
     ChatMessage,
@@ -201,6 +209,7 @@ class GameSession:
             **flee_resolvers(),
             **loot_resolvers(),
             **rest_sleep_resolvers(),
+            **alliance_resolvers(),
         }
         self._phase = SessionPhase.WAITING
         self._waiting_reason: SessionWaitReason | None = SessionWaitReason.NO_AGENTS
@@ -342,7 +351,13 @@ class GameSession:
             spawn = self._spawns[slot]
             agent_id = AgentId(f"ag_{slot + 1:02d}")
             agent = self._profiles[slot].build(agent_id, spawn)
-            self._state = replace(self._state, agents=(*self._state.agents, agent))
+            # A joining agent is always new: never inherit a departed agent's
+            # social records for the same slot id.
+            self._state = replace(
+                self._state,
+                agents=(*self._state.agents, agent),
+                alliances=drop_agent_alliances(self._state.alliances, agent_id),
+            )
             self._engine = TurnEngine(
                 self._state,
                 resolvers=self._resolvers,
@@ -385,6 +400,10 @@ class GameSession:
                 )
 
             token = self._token_for_agent_locked(target)
+            remaining = drop_agent_alliances(self._state.alliances, target)
+            if len(remaining) != len(self._state.alliances):
+                self._state = replace(self._state, alliances=remaining)
+                self._engine.replace_state(self._state)
             self._engine.remove_agent(target)
             self._state = self._engine.state
             self._drop_inventory_locked(agent)
@@ -929,6 +948,33 @@ class GameSession:
             (("target_id", target_id),),
         )
 
+    def offer_alliance(self, agent_id: str, tick: int, target_id: str) -> dict[str, Any]:
+        """Queue an alliance offer to another agent."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.OFFER_ALLIANCE,
+            (("target_id", target_id),),
+        )
+
+    def accept_alliance(self, agent_id: str, tick: int, alliance_id: str) -> dict[str, Any]:
+        """Queue acceptance of a pending alliance offer."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.ACCEPT_ALLIANCE,
+            (("alliance_id", alliance_id),),
+        )
+
+    def break_alliance(self, agent_id: str, tick: int, target_id: str) -> dict[str, Any]:
+        """Queue breaking an alliance, or closing a pending offer."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.BREAK_ALLIANCE,
+            (("target_id", target_id),),
+        )
+
     def _queue(
         self,
         agent_id: str,
@@ -1179,7 +1225,12 @@ class GameSession:
         }
 
     def _record_result(self, result: TurnResult) -> None:
+        recorded: dict[AgentId, dict[str, Any]] = {}
         for event in result.events:
+            # The first event of an agent carries its primary action outcome;
+            # later events are annotations such as a betrayal and never replace it.
+            if event.agent_id in recorded:
+                continue
             success = event.outcome in {
                 "moved",
                 "waited",
@@ -1193,13 +1244,19 @@ class GameSession:
                 "built",
                 "rested",
                 "sleeping",
+                "offered",
+                "accepted",
+                "broken",
+                "withdrawn",
+                "declined",
             }
-            self._last_results[event.agent_id] = {
+            recorded[event.agent_id] = {
                 "tick": result.tick,
                 "action": event.kind.value,
                 "status": "success" if success else "rejected",
                 "outcome": event.outcome,
             }
+        self._last_results.update(recorded)
 
     def _resource_ids_at(self, state: SessionState, position: Position) -> tuple[str, ...]:
         tile = state.world.tile_at(position)
@@ -1279,7 +1336,11 @@ class GameSession:
                         key=lambda item: item[0].value,
                     )
                 ],
-                "relation": "neutral",
+                "relation": (
+                    "ally"
+                    if is_allied(self._state.alliances, agent.agent_id, other.agent_id)
+                    else "neutral"
+                ),
             }
             for other in sorted(self._state.agents, key=lambda item: item.agent_id)
             if other.agent_id != agent.agent_id
@@ -1382,6 +1443,30 @@ class GameSession:
                     for stack in inventory.stacks
                 ],
             },
+            "social": {
+                "alliances": [
+                    {
+                        "alliance_id": alliance.alliance_id,
+                        "with": str(alliance.other_member(agent.agent_id)),
+                        "since_tick": (
+                            alliance.accepted_tick
+                            if alliance.accepted_tick is not None
+                            else alliance.offered_tick
+                        ),
+                    }
+                    for alliance in active_alliances(self._state.alliances, agent.agent_id)
+                ],
+                "offers": [
+                    {
+                        "alliance_id": alliance.alliance_id,
+                        "from": str(alliance.proposed_by),
+                        "to": str(alliance.other_member(alliance.proposed_by)),
+                        "tick": alliance.offered_tick,
+                        "mine": alliance.proposed_by == agent.agent_id,
+                    }
+                    for alliance in pending_offers(self._state.alliances, agent.agent_id)
+                ],
+            },
             "available_actions": [
                 {"action": "move", "available": True},
                 {"action": "move_to", "available": True},
@@ -1398,6 +1483,9 @@ class GameSession:
                 {"action": "attack", "available": True},
                 {"action": "flee", "available": True},
                 {"action": "loot", "available": True},
+                {"action": "offer_alliance", "available": True},
+                {"action": "accept_alliance", "available": True},
+                {"action": "break_alliance", "available": True},
                 {"action": "rest", "available": True},
                 {"action": "sleep", "available": True},
             ],
@@ -1470,7 +1558,13 @@ class GameSession:
                 )
             )
             known.add(agent.agent_id)
-        return replace(state, agents=tuple(agents), corpses=tuple(corpses))
+        alive = {agent.agent_id for agent in agents if agent.is_alive}
+        return replace(
+            state,
+            agents=tuple(agents),
+            corpses=tuple(corpses),
+            alliances=drop_departed_alliances(state.alliances, alive),
+        )
 
     def _advance_chat_locked(self, tick: int) -> None:
         ready = [message for message in self._pending_chat if message.deliver_tick <= tick]

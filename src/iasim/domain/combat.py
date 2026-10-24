@@ -7,6 +7,7 @@ from enum import StrEnum
 
 from iasim.domain.actions import Action, ActionKind
 from iasim.domain.agents import Agent, AgentStatus
+from iasim.domain.alliances import BETRAYAL, is_allied
 from iasim.domain.corpse import Corpse
 from iasim.domain.identifiers import AgentId
 from iasim.domain.items import Equipment, Inventory
@@ -72,10 +73,13 @@ def resolve_attack(
         ),
     )
     rng = DeterministicRng.from_state(state.rng_state)
+    # Attacking an ally is always allowed; it only records a betrayal annotation
+    # for the operator and the future social metrics (RF-806).
+    betrayal = is_allied(state.alliances, attacker.agent_id, target.agent_id)
     if not rng.chance(hit_probability):
         return (
             replace(state, rng_state=rng.state),
-            (_event(action, CombatOutcome.MISSED),),
+            _events(action, CombatOutcome.MISSED, betrayal),
         )
 
     strength = max(
@@ -121,7 +125,7 @@ def resolve_attack(
             corpses=corpses,
             rng_state=rng.state,
         ),
-        (_event(action, outcome),),
+        _events(action, outcome, betrayal),
     )
 
 
@@ -132,6 +136,18 @@ def combat_resolvers() -> dict[ActionKind, ActionResolver]:
 
 def _event(action: Action, outcome: CombatOutcome) -> TurnEvent:
     return TurnEvent(action.tick, action.agent_id, action.kind, outcome.value)
+
+
+def _events(
+    action: Action,
+    outcome: CombatOutcome,
+    betrayal: bool,
+) -> tuple[TurnEvent, ...]:
+    """Return the combat outcome first, then the optional betrayal annotation."""
+    primary = _event(action, outcome)
+    if not betrayal:
+        return (primary,)
+    return (primary, TurnEvent(action.tick, action.agent_id, action.kind, BETRAYAL))
 
 
 def _find_agent(state: SessionState, agent_id: AgentId) -> Agent | None:
