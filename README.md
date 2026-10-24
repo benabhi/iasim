@@ -60,7 +60,7 @@ agent strip and the full-screen views:
 | `F2` | Agent sheet (attributes, mind, inventory, relations) |
 | `F3` | World summary (agent table, weather, environment) |
 | `F4` | Event log with type/agent filters and `/` search |
-| `F5` | Replay with pause and tick stepping |
+| `F5` | Replay notice in a live session; full replay with `iasim --replay <run>/replay.json` |
 | `F6` | Enlarged map with legend |
 | `F7` | Metrics and session summary |
 | `F8` | Display settings; `F11` toggles fullscreen |

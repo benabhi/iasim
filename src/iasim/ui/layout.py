@@ -1303,6 +1303,42 @@ def _render_map_footer(canvas: _Canvas, ascii_mode: bool) -> None:
     canvas.put(0, BOTTOM_BAR_Y, text, fg=theme.BAR_FG, bg=theme.BAR_BG, bold=True)
 
 
+def render_replay_notice_screen(
+    tick: int,
+    *,
+    ascii_mode: bool = False,
+) -> BaseScreen:
+    """Render the live-session F5 notice (interactive replay needs a run file)."""
+    canvas = _Canvas()
+    canvas.fill(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, fg=theme.WHITE, bg=theme.BLACK)
+    canvas.put(2, 1, "REPLAY", fg=theme.CYAN, bold=True)
+    canvas.put(
+        2,
+        3,
+        f"La sesión sigue en vivo (tick {tick}); no hay un replay grabado que reproducir.",
+        fg=theme.WHITE,
+    )
+    canvas.put(2, 4, "Al finalizar la sesión usá el archivo del run:", fg=theme.DIM)
+    canvas.put(2, 5, "iasim --replay <run>/replay.json", fg=theme.YELLOW, bold=True)
+    canvas.put(
+        2,
+        7,
+        "El replay interactivo en vivo necesita capturar los frames de la sesión.",
+        fg=theme.DIM,
+    )
+    footer = "[ESC] Volver a la vista base"
+    canvas.fill(0, BOTTOM_BAR_Y, SCREEN_WIDTH, 1, fg=theme.BAR_FG, bg=theme.BAR_BG)
+    canvas.put(
+        0,
+        BOTTOM_BAR_Y,
+        (footer + " " * SCREEN_WIDTH)[:SCREEN_WIDTH],
+        fg=theme.BAR_FG,
+        bg=theme.BAR_BG,
+        bold=True,
+    )
+    return canvas.to_screen()
+
+
 def render_help_screen(*, ascii_mode: bool = False) -> BaseScreen:
     """Render the keyboard and glyph/status legend help view."""
     canvas = _Canvas()

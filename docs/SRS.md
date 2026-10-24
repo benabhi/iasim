@@ -1065,6 +1065,9 @@ Layout de tres columnas:
 - Controles en la barra inferior.
 - Debe ser determinista: mismo estado para el mismo tick.
 - Al llegar al final, permite volver a la sesión viva si corresponde.
+- En la sesión viva el replay interactivo necesita capturar frames; la UI
+  muestra un aviso y el replay completo se reproduce desde `replay.json` al
+  finalizar. La captura/reproducción en vivo queda como mejora posterior.
 
 #### 5.6.6 F6 — Mapa ampliado
 
