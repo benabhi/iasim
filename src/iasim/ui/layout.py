@@ -33,6 +33,7 @@ from iasim.ui.events import (
     page_count,
     page_rows,
 )
+from iasim.ui.inspection import describe_position
 from iasim.ui.panel import PANEL_TABS, TAB_LABELS, PanelState, RightPanelTab
 from iasim.world.tcod_fov import compute_fov
 
@@ -207,6 +208,25 @@ class _Canvas:
     def hline(self, x: int, y: int, width: int, char: str = "─") -> None:
         self.put(x, y, char * width, fg=theme.DIM)
 
+    def highlight(
+        self,
+        x: int,
+        y: int,
+        *,
+        bg: theme.RGB,
+        fg: theme.RGB | None = None,
+    ) -> None:
+        """Recolor one existing cell without changing its glyph."""
+        if not (0 <= x < SCREEN_WIDTH and 0 <= y < SCREEN_HEIGHT):
+            return
+        cell = self._cells[y][x]
+        self._cells[y][x] = Cell(
+            cell.char,
+            cell.fg if fg is None else fg,
+            bg,
+            cell.bold,
+        )
+
     def to_screen(self) -> BaseScreen:
         return BaseScreen(
             width=SCREEN_WIDTH,
@@ -233,6 +253,8 @@ def render_base_screen(
     messages: Sequence[str] = (),
     betrayals: Sequence[str] = (),
     weather_overlay: bool = True,
+    cursor: Position | None = None,
+    inspection_pinned: bool = False,
 ) -> BaseScreen:
     """Render the deterministic base screen without mutating the session."""
     canvas = _Canvas()
@@ -244,8 +266,23 @@ def render_base_screen(
         ascii_mode,
         focus_mode=focus_mode,
         weather_overlay=weather_overlay,
+        cursor=cursor,
     )
-    _render_ticker(canvas, events, ascii_mode)
+    if cursor is None:
+        _render_ticker(canvas, events, ascii_mode)
+    else:
+        detail = describe_position(
+            state,
+            names,
+            cursor,
+            selected_agent_id=selected_agent_id,
+        )
+        _render_inspection_ticker(
+            canvas,
+            detail,
+            ascii_mode=ascii_mode,
+            pinned=inspection_pinned,
+        )
     _render_panel(
         canvas,
         state,
@@ -773,6 +810,8 @@ def render_map_screen(
     focus_mode: bool = False,
     weather_overlay: bool = True,
     ascii_mode: bool = False,
+    cursor: Position | None = None,
+    inspection_pinned: bool = False,
 ) -> BaseScreen:
     """Render the F6 enlarged map with its legend and layer help."""
     canvas = _Canvas()
@@ -785,6 +824,7 @@ def render_map_screen(
         focus_mode=focus_mode,
         weather_overlay=weather_overlay,
         origin_x=_MAP_SCREEN_ORIGIN_X,
+        cursor=cursor,
     )
     selected = _resolve_selected(state, selected_agent_id)
     clock = SimulationClock(state.tick_minutes)
@@ -811,12 +851,30 @@ def render_map_screen(
         f"{'ON' if weather_overlay else 'OFF'} · Capas: V FOV · W Clima · X Inspección",
         fg=theme.WHITE,
     )
+    inspection = (
+        None
+        if cursor is None
+        else describe_position(
+            state,
+            names,
+            cursor,
+            selected_agent_id=selected_agent_id,
+        )
+    )
+    detail_line = ""
+    if inspection and cursor is not None:
+        pinned = " · FIJADA" if inspection_pinned else ""
+        detail = " · ".join(inspection[:2])
+        detail_line = f"Inspección ({cursor.x},{cursor.y}){pinned} · {detail}"
     canvas.put(
         2,
         MAP_HEIGHT + 3,
-        "Leyenda compacta arriba · ESC vuelve a la vista base 160x45 · "
-        "V alterna FOV/memoria · W alterna clima · X inspección",
-        fg=theme.DIM,
+        detail_line
+        or (
+            "Leyenda compacta arriba · ESC vuelve a la vista base 160x45 · "
+            "V alterna FOV/memoria · W alterna clima · X inspección"
+        ),
+        fg=theme.CURSOR_FG if detail_line else theme.DIM,
     )
     _render_map_footer(canvas, ascii_mode)
     return canvas.to_screen()
@@ -977,6 +1035,7 @@ def _render_map(
     weather_overlay: bool = True,
     origin_x: int = 0,
     origin_y: int = 0,
+    cursor: Position | None = None,
 ) -> None:
     selected = _resolve_selected(state, selected_agent_id)
     visible_positions: frozenset[Position] | None = None
@@ -1102,6 +1161,18 @@ def _render_map(
             bg=theme.TILE_BACKGROUNDS[state.world.tile_at(position)],
         )
 
+    if (
+        cursor is not None
+        and state.world.contains(cursor)
+        and 0 <= cursor.x < MAP_WIDTH
+        and 0 <= cursor.y < MAP_HEIGHT
+    ):
+        canvas.highlight(
+            origin_x + cursor.x,
+            origin_y + cursor.y,
+            bg=theme.CURSOR_BG,
+        )
+
 
 def _render_memory_cell(
     canvas: _Canvas,
@@ -1176,6 +1247,39 @@ def _render_ticker(canvas: _Canvas, events: Sequence[str], ascii_mode: bool) -> 
     lines = list(events)[-2:] if events else empty_events
     for offset, line in enumerate(lines):
         canvas.put(1, TICKER_Y + 2 + offset, line, fg=theme.WHITE, bg=theme.BLACK)
+
+
+def _render_inspection_ticker(
+    canvas: _Canvas,
+    lines: Sequence[str],
+    *,
+    ascii_mode: bool,
+    pinned: bool,
+) -> None:
+    canvas.hline(
+        0,
+        TICKER_Y,
+        MAP_WIDTH,
+        char=theme.ASCII_HORIZONTAL if ascii_mode else "─",
+    )
+    label = "INSPECCIÓN" if not pinned else "INSPECCIÓN · FIJADA"
+    canvas.put(1, TICKER_Y + 1, label, fg=theme.CURSOR_FG, bg=theme.BLACK, bold=True)
+    for offset, line in enumerate(lines[:2]):
+        canvas.put(
+            1,
+            TICKER_Y + 2 + offset,
+            _clip(line, MAP_WIDTH - 2),
+            fg=theme.WHITE,
+            bg=theme.BLACK,
+        )
+    hint = "[X] cerrar · [Enter] fijar" if not pinned else "[Enter] liberar · [X] cerrar"
+    canvas.put(
+        MAP_WIDTH - len(hint) - 1,
+        TICKER_Y,
+        hint,
+        fg=theme.DIM,
+        bg=theme.BLACK,
+    )
 
 
 def _render_panel(

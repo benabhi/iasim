@@ -10,6 +10,7 @@ from iasim.ui.events import (
     EventRow,
     filter_events,
 )
+from iasim.ui.inspection import describe_position
 from iasim.ui.layout import (
     BaseScreen,
     Cell,
@@ -37,6 +38,7 @@ __all__ = [
     "UiCommand",
     "UiState",
     "UiView",
+    "describe_position",
     "filter_events",
     "handle_key",
     "render_agent_screen",
