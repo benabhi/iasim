@@ -34,8 +34,20 @@ uv run python -m iasim.reference_agent \
 ```
 
 `iasim`, `iasim serve` and `python -m iasim` are aliases. The command prints the
-MCP endpoint, the run directory and the agents file; it never prints tokens.
-Tokens are distributed in `agents.json` inside the run directory.
+MCP endpoint, the run directory and the agents file; by default it never prints
+tokens. Tokens are distributed in `agents.json` inside the run directory.
+
+To invite an agent without opening `agents.json`, start with `--show-tokens`:
+
+```bash
+uv run iasim serve --show-tokens --host 0.0.0.0 --max-agents 4
+```
+
+It prints one `URL` plus `Authorization: Bearer <token>` block per slot, with a
+warning, **on the console only**. Tokens are never written to `iasim.log` or the
+JSONL artifacts, and the default output stays token-free. Anyone who can read
+that console can use the slot; share the token over a private channel and stop
+the session if it leaks.
 
 ## What the operator sees
 
