@@ -72,6 +72,7 @@ from iasim.domain.status import (
 )
 from iasim.domain.text import sanitize_text
 from iasim.domain.throwing import throw_resolvers
+from iasim.domain.tiles import TileType
 from iasim.domain.trade_actions import trade_resolvers
 from iasim.domain.trades import (
     drop_agent_trades,
@@ -2604,6 +2605,28 @@ class GameSession:
 
     def _update_memory_locked(self, state: SessionState) -> SessionState:
         clock = self._engine.clock
+        structures_by_position = {
+            structure.position: structure.kind for structure in state.structures
+        }
+        node_ids_by_position: dict[Position, set[str]] = {}
+        for node in state.resource_nodes:
+            if not node.depleted:
+                node_ids_by_position.setdefault(node.position, set()).add(node.resource_id)
+        resource_ids_by_tile: dict[TileType, tuple[str, ...]] = {}
+
+        def resource_ids_at(position: Position) -> tuple[str, ...]:
+            tile = state.world.tile_at(position)
+            catalog_ids = resource_ids_by_tile.get(tile)
+            if catalog_ids is None:
+                catalog_ids = tuple(
+                    resource.resource_id for resource in self._catalog.resources_for_tile(tile)
+                )
+                resource_ids_by_tile[tile] = catalog_ids
+            if not state.resource_nodes:
+                return catalog_ids
+            available = node_ids_by_position.get(position, set())
+            return tuple(resource_id for resource_id in catalog_ids if resource_id in available)
+
         agents: list[Agent] = []
         for agent in state.agents:
             if not agent.is_alive:
@@ -2621,15 +2644,8 @@ class GameSession:
                     position=position,
                     tile=state.world.tile_at(position),
                     last_seen_tick=state.tick,
-                    resources=self._resource_ids_at(state, position),
-                    structure=next(
-                        (
-                            structure.kind
-                            for structure in state.structures
-                            if structure.position == position
-                        ),
-                        None,
-                    ),
+                    resources=resource_ids_at(position),
+                    structure=structures_by_position.get(position),
                 )
                 for position in sorted(visible, key=lambda item: (item.y, item.x))
             )
