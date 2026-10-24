@@ -12,21 +12,10 @@ from iasim.app.session import GameSession
 from iasim.domain.geometry import Position
 from iasim.domain.items import EquipSlot
 from iasim.domain.tiles import TileType, WorldMap
+from iasim.mcp.policy import FORBIDDEN_TOOL_TOKENS
 from iasim.mcp.protocol import PROTOCOL_VERSION
 from iasim.mcp.server import create_server
 from iasim.world.layout import WorldLayout
-
-FORBIDDEN_TOOL_TOKENS = (
-    "admin",
-    "debug",
-    "rng",
-    "seed",
-    "teleport",
-    "map",
-    "spawn",
-    "kill",
-    "operator",
-)
 
 
 def _layout() -> WorldLayout:

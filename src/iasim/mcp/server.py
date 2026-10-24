@@ -20,8 +20,10 @@ from iasim.config import is_loopback_host
 from iasim.domain.identifiers import AgentId
 from iasim.domain.items import EquipSlot
 from iasim.mcp.disconnect import TerminateSessionMiddleware
+from iasim.mcp.http import BufferedRequestBodyMiddleware
 from iasim.mcp.idempotency import MAX_REQUEST_ID_LENGTH, RequestCache, RequestSignature
 from iasim.mcp.limits import MAX_TEXT_FIELD_LENGTH, LimitKind, RateLimiter
+from iasim.mcp.policy import enforce_tool_policy
 from iasim.mcp.protocol import PROTOCOL_VERSION
 from iasim.mcp.schemas import PositiveQuantity, RequestId, Tick, TimeoutMillis, TradeItem
 
@@ -644,6 +646,7 @@ def create_server(
         """Return a minimal unauthenticated health response."""
         return JSONResponse(session.health())
 
+    enforce_tool_policy(server._tool_manager._tools)
     return server
 
 
@@ -775,6 +778,7 @@ def create_app(
     server = create_server(session, resource_url=resource_url, issuer_url=issuer_url)
     app = server.streamable_http_app()
     app.add_middleware(TerminateSessionMiddleware, session=session)
+    app.add_middleware(BufferedRequestBodyMiddleware)
     return server, app
 
 
