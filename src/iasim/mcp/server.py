@@ -292,6 +292,16 @@ def create_server(
         return session.attack(agent_id, tick, target_id)
 
     @server.tool()
+    def iasim_throw(tick: int, item_id: str, target_id: str) -> dict[str, Any]:
+        """Throw a stone at a visible target up to four tiles away."""
+        agent_id = _guard(session, limiter, LimitKind.ACTION)
+        if isinstance(agent_id, dict):
+            return agent_id
+        if _text_too_long(item_id, target_id):
+            return _message_too_long(session)
+        return session.throw(agent_id, tick, item_id, target_id)
+
+    @server.tool()
     def iasim_flee(tick: int, target_id: str) -> dict[str, Any]:
         """Flee up to two cells away from a living target."""
         agent_id = _guard(session, limiter, LimitKind.ACTION)

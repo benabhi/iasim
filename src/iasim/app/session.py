@@ -68,6 +68,7 @@ from iasim.domain.status import (
     strength_penalty,
 )
 from iasim.domain.text import sanitize_text
+from iasim.domain.throwing import throw_resolvers
 from iasim.domain.turns import (
     ActionRejectedError,
     ResolvedAction,
@@ -86,7 +87,7 @@ from iasim.errors import PersistenceError
 from iasim.world.generation import generate_layout
 from iasim.world.layout import WorldLayout
 from iasim.world.pathfinding_actions import move_to_resolvers
-from iasim.world.tcod_fov import compute_fov
+from iasim.world.tcod_fov import compute_fov, has_line_of_sight
 
 SCHEMA_VERSION = "1.0"
 MAX_NAME_LENGTH = 40
@@ -206,6 +207,7 @@ class GameSession:
             **crafting_resolvers(self._catalog),
             **construction_resolvers(self._catalog),
             **combat_resolvers(),
+            **throw_resolvers(has_line_of_sight),
             **flee_resolvers(),
             **loot_resolvers(),
             **rest_sleep_resolvers(),
@@ -948,6 +950,15 @@ class GameSession:
             (("target_id", target_id),),
         )
 
+    def throw(self, agent_id: str, tick: int, item_id: str, target_id: str) -> dict[str, Any]:
+        """Queue throwing one stone at a target up to four tiles away."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.THROW,
+            (("item_id", item_id), ("target_id", target_id)),
+        )
+
     def offer_alliance(self, agent_id: str, tick: int, target_id: str) -> dict[str, Any]:
         """Queue an alliance offer to another agent."""
         return self._queue(
@@ -1481,6 +1492,7 @@ class GameSession:
                 {"action": "build", "available": True},
                 {"action": "use", "available": True},
                 {"action": "attack", "available": True},
+                {"action": "throw", "available": True},
                 {"action": "flee", "available": True},
                 {"action": "loot", "available": True},
                 {"action": "offer_alliance", "available": True},

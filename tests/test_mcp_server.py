@@ -42,6 +42,7 @@ TOOL_NAMES = {
     "iasim_craft",
     "iasim_build",
     "iasim_attack",
+    "iasim_throw",
     "iasim_flee",
     "iasim_loot",
     "iasim_offer_alliance",

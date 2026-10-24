@@ -28,6 +28,7 @@ class ActionKind(StrEnum):
     BREAK_ALLIANCE = "break_alliance"
     LOOT = "loot"
     ATTACK = "attack"
+    THROW = "throw"
     FLEE = "flee"
     WAIT = "wait"
     REST = "rest"
@@ -61,6 +62,7 @@ _ACTION_ORDER: dict[ActionKind, int] = {
     ActionKind.ACCEPT_ALLIANCE: 5,
     ActionKind.BREAK_ALLIANCE: 5,
     ActionKind.ATTACK: 6,
+    ActionKind.THROW: 6,
     ActionKind.FLEE: 6,
     ActionKind.WAIT: 7,
     ActionKind.REST: 7,

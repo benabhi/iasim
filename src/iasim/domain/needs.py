@@ -28,6 +28,7 @@ _ACTIVITY_FACTORS: dict[ActionKind, int] = {
     ActionKind.ACCEPT_ALLIANCE: 500,
     ActionKind.BREAK_ALLIANCE: 500,
     ActionKind.ATTACK: 1500,
+    ActionKind.THROW: 1500,
     ActionKind.FLEE: 1500,
     ActionKind.WAIT: 500,
     ActionKind.REST: 500,
