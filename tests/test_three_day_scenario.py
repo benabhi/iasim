@@ -13,7 +13,7 @@ from iasim.scenario import (
     write_scenario_report,
 )
 
-GOLDEN_FINAL_HASH = "c065a4dca20d5c96af17e313c06842c54733f9f42b1ffea89ffaa4a5eca45fe9"
+GOLDEN_FINAL_HASH = "8256d8aab6bf1a801124c80e2b01971ff84955473f32ad06fef32ff997a09855"
 
 
 class ThreeDayScenarioTests(unittest.TestCase):

@@ -417,7 +417,7 @@ energia  -= 0.25 × factor_actividad
 | Pico de piedra | 2.0 | No | Crafteo | Minería de peñascos. |
 | Antorcha | 0.5 | No | Crafteo | Luz +3; dura 120 ticks. |
 | Venda | 0.1 | Sí | Crafteo | Detiene sangrado. |
-| Odre | 0.5 | No | Crafteo | 3 cargas de agua. |
+| Odre | 0.5 | No | Crafteo | 3 cargas de agua; la capacidad se valida y no puede excederse. |
 | Mochila | 1.0 | No | Crafteo | +6 slots, +10 kg. |
 | Ropa de fibra | 1.0 | No | Crafteo | Aislamiento térmico leve. |
 | Kit de campamento | 3.0 | No | Crafteo | Construye un fuego. |

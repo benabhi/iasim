@@ -193,8 +193,15 @@ def _parse_item(entry: Any, source: Path, index: int) -> ItemSpec:
     weight = _require_int(data, "weight_g", source, context)
     stackable = _require_bool(data, "stackable", source, context)
     max_stack = _optional_int(data, "max_stack", 1, source, context)
+    water_charges = _optional_int(data, "water_charges", 0, source, context)
     try:
-        definition = ItemDefinition(ItemId(item_id), weight, stackable, max_stack)
+        definition = ItemDefinition(
+            ItemId(item_id),
+            weight,
+            stackable,
+            max_stack,
+            water_charges,
+        )
     except ValueError as exc:
         raise CatalogError(f"{source}: {context}: {exc}") from exc
 
@@ -224,7 +231,7 @@ def _parse_item(entry: Any, source: Path, index: int) -> ItemSpec:
             tool_tags=_optional_str_tuple(data, "tool_tags", source, context),
             hunger_restore=_optional_int(data, "hunger_restore", 0, source, context),
             thirst_restore=_optional_int(data, "thirst_restore", 0, source, context),
-            water_charges=_optional_int(data, "water_charges", 0, source, context),
+            water_charges=water_charges,
             bonus_slots=_optional_int(data, "bonus_slots", 0, source, context),
             bonus_weight_grams=_optional_int(data, "bonus_weight_g", 0, source, context),
             light_radius=_optional_int(data, "light_radius", 0, source, context),
