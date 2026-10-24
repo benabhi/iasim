@@ -11,6 +11,7 @@ from iasim.domain.agents import Agent, AgentStatus
 from iasim.domain.alliances import Alliance, AllianceStatus
 from iasim.domain.climate import effective_vision
 from iasim.domain.clock import DayPhase, SimulationClock
+from iasim.domain.corpse import Corpse
 from iasim.domain.geometry import Position
 from iasim.domain.identifiers import AgentId
 from iasim.domain.memory import AgentMemory, MemoryEntry
@@ -1368,6 +1369,7 @@ def _render_panel(
             messages=messages,
             betrayals=betrayals,
             ascii_mode=ascii_mode,
+            capacity=capacity,
         )
         return
 
@@ -1397,15 +1399,28 @@ def _status_line(
 ) -> str:
     status = "PAUSA" if paused else "EN CURSO"
     if waiting_reason is not None:
-        status = "ESPERANDO AGENTES"
-        if waiting_reason == "last_death":
-            status += " · ÚLTIMA MUERTE"
-    occupied = len(state.agents)
-    alive = sum(1 for agent in state.agents if agent.is_alive)
-    free = max(0, capacity - occupied)
+        status = f"ESPERANDO AGENTES · {_waiting_label(waiting_reason)}"
+    connected = sum(1 for agent in state.agents if agent.status is AgentStatus.ACTIVE)
+    absent = sum(1 for agent in state.agents if agent.status is AgentStatus.ABSENT)
+    dead = sum(1 for agent in state.agents if not agent.is_alive)
+    free = _free_slots(state, capacity)
     return (
-        f"{status} · VEL {speed}x · AGENTES {occupied}/{capacity} · {alive} vivos · {free} libres"
+        f"{status} · VEL {speed}x · AGENTES {len(state.agents)}/{capacity} · "
+        f"{connected} con · {absent} aus · {dead} mue · {len(free)} lib"
     )
+
+
+def _waiting_label(reason: str) -> str:
+    return {
+        "no_agents": "SIN AGENTES",
+        "last_death": "ÚLTIMA MUERTE",
+        "no_active_agents": "SIN AGENTES ACTIVOS",
+    }.get(reason, reason.upper())
+
+
+def _free_slots(state: SessionState, capacity: int) -> list[str]:
+    present = {str(agent.agent_id) for agent in state.agents}
+    return [f"ag_{slot:02d}" for slot in range(1, capacity + 1) if f"ag_{slot:02d}" not in present]
 
 
 def _tab_bar(
@@ -1441,12 +1456,20 @@ def _render_compact_strip(
     pieces: list[str] = []
     for index, agent in enumerate(agents, start=1):
         name = names.get(agent.agent_id, str(agent.agent_id))
-        mark = "@" if agent.is_alive else ("X" if ascii_mode else "☠")
+        if agent.status is AgentStatus.DEAD:
+            mark = "X" if ascii_mode else "☠"
+        elif agent.status is AgentStatus.ABSENT:
+            mark = "?" if ascii_mode else "…"
+        else:
+            mark = "@"
         selected_mark = ">" if ascii_mode else "▶"
         is_selected = selected is not None and agent.agent_id == selected.agent_id
         prefix = selected_mark if is_selected else " "
         pieces.append(f"{prefix}{index}{mark}{name}")
     text = "  ".join(pieces) if pieces else "— sin agentes —"
+    free = _free_slots(state, capacity)
+    if free:
+        text = f"{text}  +{len(free)} libres"
     _panel(canvas, y, text, fg=theme.WHITE, bold=True)
 
 
@@ -1462,6 +1485,7 @@ def _render_summary(
     messages: Sequence[str],
     betrayals: Sequence[str],
     ascii_mode: bool,
+    capacity: int,
 ) -> None:
     separator = (theme.ASCII_HORIZONTAL if ascii_mode else "─") * PANEL_CONTENT_WIDTH
     agents = list(state.agents)[:8]
@@ -1487,6 +1511,15 @@ def _render_summary(
             ),
             bg=theme.SELECTED_BG if is_selected else theme.PANEL_BG,
             bold=is_selected,
+        )
+        y += 1
+    free = _free_slots(state, capacity)
+    if free:
+        _panel(
+            canvas,
+            y,
+            f"LIBRES: {', '.join(free)}",
+            fg=theme.DIM,
         )
         y += 1
     _panel(canvas, y, separator, fg=theme.DIM)
@@ -1568,15 +1601,21 @@ def _render_selected_block(
     y += 1
     death = _death_detail(state, selected)
     if not selected.is_alive:
+        corpse = next(
+            (candidate for candidate in state.corpses if candidate.agent_id == selected.agent_id),
+            None,
+        )
         _panel(canvas, y, f"Estado: MUERTO · {death}", fg=theme.RED)
         y += 1
         tags = _status_tags(selected)
         _panel(canvas, y, f"ESTADOS: {' · '.join(tags) if tags else '—'}")
         y += 1
-        _panel(canvas, y, "INVENTARIO", fg=theme.CYAN, bold=True)
+        _panel(canvas, y, "CADÁVER", fg=theme.CYAN, bold=True)
         y += 1
-        _panel(canvas, y, "— saqueado —", fg=theme.DIM)
-        return y + 1
+        for line in _corpse_lines(corpse):
+            _panel(canvas, y, line, fg=theme.DIM)
+            y += 1
+        return y
 
     attributes = selected.attributes
     inventory = selected.inventory
@@ -1787,6 +1826,13 @@ def _links_lines(
             lines.append("  — sin equipo —")
     else:
         lines.append("  — sin agente seleccionado —")
+    if selected is not None and not selected.is_alive:
+        corpse = next(
+            (candidate for candidate in state.corpses if candidate.agent_id == selected.agent_id),
+            None,
+        )
+        lines.append("CADÁVER")
+        lines.extend(f"  {line}" for line in _corpse_lines(corpse))
     lines.extend(("ALIANZAS", f"  {_alliances_line(state, names)}"))
     lines.extend(("TRUEQUES", f"  {_trades_line(state, names)}"))
     lines.append("MENSAJES")
@@ -1917,6 +1963,19 @@ def _death_detail(state: SessionState, agent: Agent) -> str | None:
     if agent.status is AgentStatus.DEAD:
         return "muerto"
     return None
+
+
+def _corpse_lines(corpse: Corpse | None) -> list[str]:
+    if corpse is None:
+        return ["— sin cadáver registrado —"]
+    loot = ", ".join(
+        f"{stack.definition.item_id} x{stack.quantity}" for stack in corpse.inventory.stacks
+    )
+    equipment = ", ".join(spec.item_id for _, spec in corpse.equipment.items)
+    return [
+        f"Botín: {loot or '— vacío —'}",
+        f"Equipo: {equipment or '— sin equipo —'}",
+    ]
 
 
 def _mind_lines(report: MindReport | None, limit: int) -> list[str]:
