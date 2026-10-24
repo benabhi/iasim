@@ -11,6 +11,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -94,13 +95,17 @@ from iasim.domain.weather import (
     apply_weather_wetness,
 )
 from iasim.errors import PersistenceError
-from iasim.protocol import MAX_PROTOCOL_VERSION_LENGTH, PROTOCOL_VERSION
+from iasim.persistence.logs import SessionLogs
+from iasim.protocol import (
+    MAX_PROTOCOL_VERSION_LENGTH,
+    PROTOCOL_VERSION,
+    SCHEMA_VERSION,
+)
 from iasim.world.generation import generate_layout
 from iasim.world.layout import WorldLayout
 from iasim.world.pathfinding_actions import move_to_resolvers
 from iasim.world.tcod_fov import compute_fov, has_line_of_sight
 
-SCHEMA_VERSION = "1.0"
 MAX_NAME_LENGTH = 40
 DEFAULT_TURN_TIMEOUT_MS = 60_000
 DEFAULT_TIMEOUT_DISCONNECTS = 3
@@ -156,7 +161,7 @@ class GameSession:
         weather_min_ticks: int = DEFAULT_WEATHER_MIN_TICKS,
         weather_max_ticks: int = DEFAULT_WEATHER_MAX_TICKS,
         usage_pricing: Mapping[str, ModelPricing] | None = None,
-        mind_log_path: Path | None = None,
+        log_dir: Path | None = None,
         wall_clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if seed < 0:
@@ -216,7 +221,9 @@ class GameSession:
         self._weather_max_ticks = weather_max_ticks
         self._usage_pricing = dict(usage_pricing or {})
         self._usage: dict[AgentId, list[UsageEntry]] = {}
-        self._mind_log_path = mind_log_path
+        self._log_dir = log_dir
+        self._logs = None if log_dir is None else SessionLogs(log_dir)
+        self._logged_corpse_ids: set[str] = set()
         self._mind_reports: dict[AgentId, MindReport] = {}
         self._mind_tick: dict[AgentId, int] = {}
         self._pending_chat: list[ChatMessage] = []
@@ -266,6 +273,11 @@ class GameSession:
         self._joined_slots: set[int] = set()
         self._lock = threading.RLock()
         self._condition = threading.Condition(self._lock)
+        self._logged_phase = self._phase
+        self._logged_waiting_reason: SessionWaitReason | None = self._waiting_reason
+        self._started_at = datetime.now(UTC).isoformat()
+        if self._logs is not None:
+            self._write_session_metadata_locked()
         if token_path is not None:
             self._write_tokens(token_path)
 
@@ -422,6 +434,13 @@ class GameSession:
             self._joined_slots.add(slot)
             self._token_agents[token] = agent_id
             self._update_phase_locked()
+            self._log_event_locked(
+                "join",
+                agent_id=str(agent_id),
+                name=clean_name,
+                spawn=[spawn.x, spawn.y],
+            )
+            self._write_session_metadata_locked()
             self._persist_tokens_locked()
             self._condition.notify_all()
             return {
@@ -435,7 +454,7 @@ class GameSession:
                 "session": self._session_info_locked(),
             }
 
-    def leave(self, agent_id: str) -> dict[str, Any]:
+    def leave(self, agent_id: str, *, cause: str = "leave") -> dict[str, Any]:
         """Remove a connected living agent and free its slot for a new join."""
         with self._condition:
             target = AgentId(agent_id)
@@ -479,6 +498,12 @@ class GameSession:
                 if slot is not None:
                     self._joined_slots.discard(slot)
             self._update_phase_locked()
+            self._log_event_locked(
+                "disconnect",
+                agent_id=str(target),
+                cause=cause,
+            )
+            self._write_session_metadata_locked()
             self._persist_tokens_locked()
             self._condition.notify_all()
             self._resolve_if_complete()
@@ -897,6 +922,12 @@ class GameSession:
                     target_id=target_agent_id,
                 )
             )
+            self._log_event_locked(
+                "message",
+                agent_id=str(target),
+                target_id=None if target_agent_id is None else str(target_agent_id),
+                text=text,
+            )
             return {
                 "ok": True,
                 "schema_version": SCHEMA_VERSION,
@@ -1008,23 +1039,130 @@ class GameSession:
             return dict(self._mind_reports)
 
     def _append_mind_log_locked(self, report: MindReport) -> None:
-        if self._mind_log_path is None:
+        if self._logs is None:
             return
         try:
-            self._mind_log_path.parent.mkdir(parents=True, exist_ok=True)
-            with self._mind_log_path.open("a", encoding="utf-8") as handle:
-                handle.write(
-                    json.dumps(
-                        report.as_log_record(SCHEMA_VERSION),
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    )
-                    + "\n"
-                )
+            self._logs.thought(report.as_dict())
         except OSError as exc:
-            raise PersistenceError(
-                f"cannot append mind report to {self._mind_log_path}: {exc}"
-            ) from exc
+            raise PersistenceError(f"cannot append mind report: {exc}") from exc
+
+    def _log_event_locked(
+        self,
+        kind: str,
+        *,
+        tick: int | None = None,
+        agent_id: str | None = None,
+        **fields: Any,
+    ) -> None:
+        if self._logs is None:
+            return
+        self._logs.event(
+            kind=kind,
+            tick=self._state.tick if tick is None else tick,
+            agent_id=agent_id,
+            **fields,
+        )
+
+    def _log_action_locked(
+        self,
+        event: TurnEvent,
+        *,
+        status: str,
+        error: str | None = None,
+    ) -> None:
+        if self._logs is None:
+            return
+        pending = self._pending_actions.get(event.agent_id)
+        self._logs.action(
+            tick=event.tick,
+            agent_id=str(event.agent_id),
+            action=event.kind.value,
+            status=status,
+            arguments=None if pending is None else pending.payload_dict(),
+            outcome=None if error is not None else event.outcome,
+            error=error,
+        )
+
+    def _reject_action_locked(
+        self,
+        action: Action,
+        code: str,
+        message: str,
+        *,
+        details: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if self._logs is not None:
+            self._logs.action(
+                tick=action.tick,
+                agent_id=str(action.agent_id),
+                action=action.kind.value,
+                status="rejected",
+                arguments=action.payload_dict(),
+                error=code,
+            )
+        return self._error(code, message, tick=action.tick, details=details)
+
+    def _write_session_metadata_locked(self) -> None:
+        if self._logs is None:
+            return
+        self._logs.write_session(
+            {
+                "protocol_version": PROTOCOL_VERSION,
+                "seed": self._state.seed,
+                "tick": self._state.tick,
+                "tick_minutes": self._state.tick_minutes,
+                "max_agents": self._max_agents,
+                "turn_timeout_ms": self._turn_timeout_ms,
+                "timeout_disconnects": self._timeout_disconnects,
+                "weather": {
+                    "min_ticks": self._weather_min_ticks,
+                    "max_ticks": self._weather_max_ticks,
+                },
+                "started_at": self._started_at,
+                "debug_used": False,
+                "finished": self._phase is SessionPhase.FINISHED,
+                "end_reason": (self._end_reason.value if self._end_reason is not None else None),
+                "final_state_hash": self._final_state_hash,
+                "agents": [
+                    {
+                        "id": str(agent.agent_id),
+                        "name": self._names.get(agent.agent_id, ""),
+                        "alive": agent.is_alive,
+                        "status": agent.status.value,
+                    }
+                    for agent in sorted(self._state.agents, key=lambda item: item.agent_id)
+                ],
+            }
+        )
+
+    def _log_phase_transition_locked(self) -> None:
+        if (
+            self._phase is self._logged_phase
+            and self._waiting_reason is self._logged_waiting_reason
+        ):
+            return
+        self._logged_phase = self._phase
+        self._logged_waiting_reason = self._waiting_reason
+        if self._phase is SessionPhase.WAITING:
+            self._log_event_locked(
+                "waiting",
+                reason=(self._waiting_reason.value if self._waiting_reason is not None else None),
+            )
+        else:
+            self._log_event_locked("running")
+
+    def _log_new_deaths_locked(self, state: SessionState) -> None:
+        for corpse in state.corpses:
+            if corpse.corpse_id in self._logged_corpse_ids:
+                continue
+            self._logged_corpse_ids.add(corpse.corpse_id)
+            self._log_event_locked(
+                "death",
+                tick=corpse.death_tick,
+                agent_id=str(corpse.agent_id),
+                cause=corpse.cause,
+                killer_id=(None if corpse.killer_id is None else str(corpse.killer_id)),
+            )
 
     def move(self, agent_id: str, tick: int, dx: int, dy: int) -> dict[str, Any]:
         """Queue one primary move action for the current tick."""
@@ -1380,6 +1518,12 @@ class GameSession:
                 self._waiting_reason = None
                 self._end_reason = reason
                 self._final_state_hash = canonical_state_hash(self._state)
+                self._log_event_locked(
+                    "session_end",
+                    reason=reason.value,
+                    state_hash=self._final_state_hash,
+                )
+                self._write_session_metadata_locked()
                 self._condition.notify_all()
             summary = self._summary_locked()
             if summary is None:
@@ -1414,7 +1558,7 @@ class GameSession:
                 weather_min_ticks=self._weather_min_ticks,
                 weather_max_ticks=self._weather_max_ticks,
                 usage_pricing=self._usage_pricing,
-                mind_log_path=self._mind_log_path,
+                log_dir=self._log_dir,
                 wall_clock=self._wall_clock,
             )
 
@@ -1437,40 +1581,42 @@ class GameSession:
             target = AgentId(agent_id)
             agent = self._find_agent(agent_id)
             if target not in self._names or agent is None:
-                return self._error("NOT_YOUR_TURN", "agent is not joined")
+                return self._reject_action_locked(action, "NOT_YOUR_TURN", "agent is not joined")
             if self._phase is SessionPhase.FINISHED:
-                return self._error("SESSION_FINISHED", "the session has ended", tick=action.tick)
+                return self._reject_action_locked(
+                    action, "SESSION_FINISHED", "the session has ended"
+                )
             if not agent.is_alive:
-                return self._error("AGENT_DEAD", "agent is dead", tick=action.tick)
+                return self._reject_action_locked(action, "AGENT_DEAD", "agent is dead")
             if agent.status is not AgentStatus.ACTIVE:
-                return self._error(
+                return self._reject_action_locked(
+                    action,
                     "AGENT_ABSENT",
                     f"agent is {agent.status.value}",
-                    tick=action.tick,
                 )
             if action.tick != self._state.tick:
                 code = "STALE_TICK" if action.tick < self._state.tick else "INVALID_TICK"
-                return self._error(
+                return self._reject_action_locked(
+                    action,
                     code,
                     f"action tick {action.tick} does not match current tick {self._state.tick}",
-                    tick=action.tick,
                     details={
                         "received_tick": action.tick,
                         "current_tick": self._state.tick,
                     },
                 )
             if target in self._engine.pending_agents:
-                return self._error(
+                return self._reject_action_locked(
+                    action,
                     "ALREADY_ACTED",
                     "agent already acted this tick",
-                    tick=action.tick,
                     details={"agent_id": str(target), "tick": action.tick},
                 )
 
             try:
                 self._engine.submit(action)
             except ActionRejectedError as exc:
-                return self._error("INTERNAL_ERROR", str(exc), tick=action.tick)
+                return self._reject_action_locked(action, "INTERNAL_ERROR", str(exc))
 
             self._timeouts.pop(target, None)
             self._pending_actions[target] = action
@@ -1525,6 +1671,11 @@ class GameSession:
                 continue
             timeouts = self._timeouts.get(agent.agent_id, 0) + 1
             self._timeouts[agent.agent_id] = timeouts
+            self._log_event_locked(
+                "timeout",
+                agent_id=str(agent.agent_id),
+                consecutive=timeouts,
+            )
             if timeouts >= self._timeout_disconnects:
                 absent.add(agent.agent_id)
         if absent:
@@ -1536,6 +1687,12 @@ class GameSession:
                 ),
             )
             self._engine.replace_state(self._state)
+            for agent_id in sorted(absent):
+                self._log_event_locked(
+                    "absent",
+                    agent_id=str(agent_id),
+                    consecutive=self._timeouts[agent_id],
+                )
 
         result = self._engine.resolve()
         self._state = self._engine.state
@@ -1571,6 +1728,7 @@ class GameSession:
         if has_active_agent:
             self._phase = SessionPhase.RUNNING
             self._waiting_reason = None
+            self._log_phase_transition_locked()
             return
         self._phase = SessionPhase.WAITING
         if not self._joined_slots and not self._state.agents:
@@ -1579,6 +1737,7 @@ class GameSession:
             self._waiting_reason = SessionWaitReason.LAST_DEATH
         else:
             self._waiting_reason = SessionWaitReason.NO_ACTIVE_AGENTS
+        self._log_phase_transition_locked()
 
     def _session_info_locked(self) -> dict[str, Any]:
         info: dict[str, Any] = {
@@ -1676,6 +1835,10 @@ class GameSession:
                 "status": "success" if success else "rejected",
                 "outcome": event.outcome,
             }
+            self._log_action_locked(
+                event,
+                status="success" if success else "rejected",
+            )
         self._last_results.update(recorded)
         self._pending_actions.clear()
 
@@ -1686,13 +1849,20 @@ class GameSession:
             raw_target = action.payload_dict().get("target_id")
             if isinstance(raw_target, str) and raw_target:
                 target_id = AgentId(raw_target)
-        self._social.record_outcome(
+        recorded = self._social.record_outcome(
             tick=event.tick,
             agent_id=event.agent_id,
             action_kind=event.kind.value,
             outcome=event.outcome,
             target_id=target_id,
         )
+        if recorded is not None:
+            self._log_event_locked(
+                recorded.kind.value,
+                tick=recorded.tick,
+                agent_id=str(recorded.agent_id),
+                target_id=(None if recorded.target_id is None else str(recorded.target_id)),
+            )
 
     def social_metrics(self) -> dict[str, Any]:
         """Return the social counters per session and per agent."""
@@ -1973,6 +2143,7 @@ class GameSession:
         state = apply_sleep_tick(state)
         state = apply_status_tick(state)
         state = self._finalize_deaths_locked(state)
+        self._log_new_deaths_locked(state)
         state = replace(
             state,
             resource_nodes=advance_resource_nodes(

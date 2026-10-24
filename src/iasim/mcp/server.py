@@ -15,7 +15,7 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from iasim.app.session import SCHEMA_VERSION, GameSession
+from iasim.app.session import GameSession
 from iasim.config import is_loopback_host
 from iasim.domain.identifiers import AgentId
 from iasim.domain.items import EquipSlot
@@ -32,7 +32,7 @@ from iasim.mcp.schemas import (
     TimeoutMillis,
     TradeItem,
 )
-from iasim.protocol import PROTOCOL_VERSION
+from iasim.protocol import PROTOCOL_VERSION, SCHEMA_VERSION
 
 DEFAULT_RESOURCE_URL = "http://127.0.0.1:8765/mcp"
 DEFAULT_ISSUER_URL = "http://127.0.0.1:8765"

@@ -8,3 +8,6 @@ of them must increase the major part of the version and bump the observation
 
 PROTOCOL_VERSION = "iasim-mcp/1.0"
 MAX_PROTOCOL_VERSION_LENGTH = 32
+
+# Version of the observation, action, and log payloads.
+SCHEMA_VERSION = "1.0"

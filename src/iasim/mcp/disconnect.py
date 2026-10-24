@@ -39,4 +39,4 @@ class TerminateSessionMiddleware:
             return
         agent_id = self._session.agent_for_token(token)
         if agent_id is not None:
-            self._session.leave(str(agent_id))
+            self._session.leave(str(agent_id), cause="transport_closed")
