@@ -6,6 +6,7 @@ import unittest
 
 from iasim.domain.identifiers import AgentId
 from iasim.ui.controls import KEY_GUIDE, SPEEDS, UiCommand, UiState, handle_key
+from iasim.ui.panel import PANEL_PAGE, RightPanelTab
 
 AGENTS = (AgentId("ag_01"), AgentId("ag_02"), AgentId("ag_03"))
 
@@ -93,10 +94,57 @@ class UiControlTests(unittest.TestCase):
         self.assertIsNone(cancelled.pending_confirmation)
         self.assertFalse(cancelled.quit_requested)
 
+    def test_bracket_keys_cycle_panel_tabs(self) -> None:
+        state = handle_key(UiState(), "]", AGENTS)
+        self.assertEqual(state.panel.tab, RightPanelTab.EVENTS)
+        state = handle_key(state, "]", AGENTS)
+        self.assertEqual(state.panel.tab, RightPanelTab.MIND)
+        state = handle_key(state, "]", AGENTS)
+        self.assertEqual(state.panel.tab, RightPanelTab.LINKS)
+        state = handle_key(state, "]", AGENTS)
+        self.assertEqual(state.panel.tab, RightPanelTab.SUMMARY)
+        state = handle_key(state, "[", AGENTS)
+        self.assertEqual(state.panel.tab, RightPanelTab.LINKS)
+
+    def test_panel_scroll_keys_move_and_clamp_the_offset(self) -> None:
+        state = handle_key(UiState(), "down", AGENTS)
+        self.assertEqual(state.panel.scroll, 1)
+        state = handle_key(state, "down", AGENTS)
+        self.assertEqual(state.panel.scroll, 2)
+        state = handle_key(state, "up", AGENTS)
+        self.assertEqual(state.panel.scroll, 1)
+        state = handle_key(state, "up", AGENTS)
+        state = handle_key(state, "up", AGENTS)
+        self.assertEqual(state.panel.scroll, 0)
+        state = handle_key(state, "pagedown", AGENTS)
+        self.assertEqual(state.panel.scroll, PANEL_PAGE)
+        state = handle_key(state, "pageup", AGENTS)
+        self.assertEqual(state.panel.scroll, 0)
+        state = handle_key(state, "end", AGENTS)
+        self.assertGreater(state.panel.scroll, 0)
+        state = handle_key(state, "home", AGENTS)
+        self.assertEqual(state.panel.scroll, 0)
+
+    def test_escape_returns_to_the_summary_tab(self) -> None:
+        state = handle_key(UiState(), "]", AGENTS)
+        state = handle_key(state, "down", AGENTS)
+
+        state = handle_key(state, "esc", AGENTS)
+
+        self.assertEqual(state.panel.tab, RightPanelTab.SUMMARY)
+        self.assertEqual(state.panel.scroll, 0)
+
+    def test_escape_in_summary_leaves_the_state_unchanged(self) -> None:
+        state = UiState()
+
+        self.assertEqual(handle_key(state, "esc", AGENTS), state)
+
     def test_key_guide_covers_critical_controls(self) -> None:
         keys = {key for key, _ in KEY_GUIDE}
 
-        self.assertTrue({"ESPACIO", "1-8", "TAB", "+ / -", "F1", "A", "Q", "R", "ESC"} <= keys)
+        self.assertTrue(
+            {"ESPACIO", "1-8", "TAB", "+ / -", "F1", "A", "Q", "R", "ESC", "[ / ]"} <= keys
+        )
 
 
 if __name__ == "__main__":
