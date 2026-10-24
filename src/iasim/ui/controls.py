@@ -28,6 +28,7 @@ KEY_GUIDE: tuple[tuple[str, str], ...] = (
     ("F1", "Abrir / cerrar ayuda"),
     ("A", "Alternar ASCII"),
     ("V", "Alternar foco FOV / mapa completo"),
+    ("W", "Alternar capa de clima"),
     ("Q", "Salir (confirmar)"),
     ("R", "Reiniciar (confirmar)"),
     ("ESC", "Cancelar / cerrar ayuda o volver a RESUMEN"),
@@ -62,6 +63,7 @@ class UiState:
     help_open: bool = False
     ascii_mode: bool = False
     focus_mode: bool = False
+    weather_overlay: bool = True
     pending_confirmation: UiCommand | None = None
     quit_requested: bool = False
     restart_requested: bool = False
@@ -143,6 +145,9 @@ def handle_key(
 
     if normalized == "v":
         return replace(state, focus_mode=not state.focus_mode)
+
+    if normalized == "w":
+        return replace(state, weather_overlay=not state.weather_overlay)
 
     if normalized == "q":
         return replace(state, pending_confirmation=UiCommand.QUIT)

@@ -12,13 +12,14 @@ from iasim.domain.climate import effective_vision
 from iasim.domain.clock import DayPhase, SimulationClock
 from iasim.domain.geometry import Position
 from iasim.domain.identifiers import AgentId
+from iasim.domain.memory import AgentMemory, MemoryEntry
 from iasim.domain.mind import MindReport
 from iasim.domain.session import SessionState
 from iasim.domain.status import Condition, status_tags
 from iasim.domain.tiles import TileType
 from iasim.domain.trades import TradeStatus
 from iasim.domain.usage import AgentUsage, CostSource
-from iasim.domain.weather import WeatherKind
+from iasim.domain.weather import WeatherKind, WeatherState
 from iasim.domain.world import StructureKind
 from iasim.ui import theme
 from iasim.ui.controls import KEY_GUIDE, STATUS_GUIDE
@@ -215,11 +216,19 @@ def render_base_screen(
     panel: PanelState | None = None,
     messages: Sequence[str] = (),
     betrayals: Sequence[str] = (),
+    weather_overlay: bool = True,
 ) -> BaseScreen:
     """Render the deterministic base screen without mutating the session."""
     canvas = _Canvas()
     canvas.fill(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, fg=theme.WHITE, bg=theme.BLACK)
-    _render_map(canvas, state, selected_agent_id, ascii_mode, focus_mode=focus_mode)
+    _render_map(
+        canvas,
+        state,
+        selected_agent_id,
+        ascii_mode,
+        focus_mode=focus_mode,
+        weather_overlay=weather_overlay,
+    )
     _render_ticker(canvas, events, ascii_mode)
     _render_panel(
         canvas,
@@ -321,6 +330,7 @@ def _render_map(
     ascii_mode: bool,
     *,
     focus_mode: bool = False,
+    weather_overlay: bool = True,
 ) -> None:
     selected = _resolve_selected(state, selected_agent_id)
     visible_positions: frozenset[Position] | None = None
@@ -335,38 +345,148 @@ def _render_map(
         )
         visible_positions = compute_fov(state.world, selected.position, radius)
 
+    structures = {structure.position: structure for structure in state.structures}
+    corpses = {corpse.position: corpse for corpse in state.corpses}
+    ground_items = {item.position: item for item in state.ground_items}
+    depleted = {node.position for node in state.resource_nodes if node.depleted}
+    agents_at = {agent.position: agent for agent in state.agents}
+    memory_tiles: dict[Position, MemoryEntry] = {}
+    memory_agents: tuple[AgentMemory, ...] = ()
+    if visible_positions is not None and selected is not None:
+        memory_tiles = {entry.position: entry for entry in selected.memory.tiles}
+        memory_agents = selected.memory.agents
+
     for y in range(MAP_HEIGHT):
         for x in range(MAP_WIDTH):
             if x >= state.world.width or y >= state.world.height:
                 continue
             position = Position(x, y)
-            if visible_positions is not None and position not in visible_positions:
-                canvas.put(x, y, " ", fg=theme.BLACK, bg=theme.BLACK)
+            visible = visible_positions is None or position in visible_positions
+            if not visible:
+                _render_memory_cell(
+                    canvas,
+                    position,
+                    memory_tiles.get(position),
+                    ascii_mode,
+                )
                 continue
             tile = state.world.tile_at(position)
+            background = theme.TILE_BACKGROUNDS[tile]
+            color = theme.DIM if position in depleted else theme.TILE_COLORS[tile]
             canvas.put(
                 x,
                 y,
                 theme.tile_glyph(tile, ascii_mode=ascii_mode),
-                fg=theme.TILE_COLORS[tile],
-                bg=theme.TILE_BACKGROUNDS[tile],
+                fg=color,
+                bg=background,
             )
+            if weather_overlay:
+                overlay = _weather_overlay(
+                    position,
+                    state.weather,
+                    state.tick,
+                    ascii_mode,
+                )
+                if overlay is not None:
+                    glyph, overlay_color = overlay
+                    canvas.put(x, y, glyph, fg=overlay_color, bg=background)
+            structure = structures.get(position)
+            if structure is not None:
+                canvas.put(
+                    x,
+                    y,
+                    theme.structure_glyph(structure.kind, ascii_mode=ascii_mode),
+                    fg=theme.STRUCTURE_COLORS[structure.kind],
+                    bg=background,
+                    bold=structure.lit,
+                )
+            corpse = corpses.get(position)
+            if corpse is not None:
+                glyph = theme.ASCII_CORPSE_GLYPH if ascii_mode else theme.CORPSE_GLYPH
+                canvas.put(x, y, glyph, fg=theme.CORPSE_COLOR, bg=background)
+            item = ground_items.get(position)
+            if item is not None:
+                glyph = theme.ASCII_GROUND_ITEM_GLYPH if ascii_mode else theme.GROUND_ITEM_GLYPH
+                canvas.put(x, y, glyph, fg=theme.GROUND_ITEM_COLOR, bg=background)
+            agent = agents_at.get(position)
+            if agent is not None:
+                is_selected = agent.agent_id == selected_agent_id
+                canvas.put(
+                    x,
+                    y,
+                    _agent_glyph(agent, ascii_mode),
+                    fg=theme.AGENT_COLOR,
+                    bg=theme.SELECTED_BG if is_selected else background,
+                    bold=is_selected,
+                )
 
-    for agent in state.agents:
-        if not (0 <= agent.position.x < MAP_WIDTH and 0 <= agent.position.y < MAP_HEIGHT):
+    for remembered in memory_agents:
+        position = remembered.position
+        if not (0 <= position.x < MAP_WIDTH and 0 <= position.y < MAP_HEIGHT):
             continue
-        if visible_positions is not None and agent.position not in visible_positions:
+        if visible_positions is not None and position in visible_positions:
             continue
-        is_selected = agent.agent_id == selected_agent_id
-        tile = state.world.tile_at(agent.position)
+        if position in agents_at:
+            continue
         canvas.put(
-            agent.position.x,
-            agent.position.y,
-            _agent_glyph(agent, ascii_mode),
-            fg=theme.AGENT_COLOR,
-            bg=theme.SELECTED_BG if is_selected else theme.TILE_BACKGROUNDS[tile],
-            bold=is_selected,
+            position.x,
+            position.y,
+            "?" if ascii_mode else "…",
+            fg=theme.MEMORY_COLOR,
+            bg=theme.TILE_BACKGROUNDS[state.world.tile_at(position)],
         )
+
+
+def _render_memory_cell(
+    canvas: _Canvas,
+    position: Position,
+    entry: MemoryEntry | None,
+    ascii_mode: bool,
+) -> None:
+    """Render one remembered cell outside the current field of view."""
+    if entry is None:
+        canvas.put(position.x, position.y, " ", fg=theme.BLACK, bg=theme.BLACK)
+        return
+    color = theme.STALE_MEMORY_COLOR if entry.stale else theme.MEMORY_COLOR
+    background = theme.TILE_BACKGROUNDS[entry.tile]
+    canvas.put(
+        position.x,
+        position.y,
+        theme.tile_glyph(entry.tile, ascii_mode=ascii_mode),
+        fg=color,
+        bg=background,
+    )
+    if entry.structure is not None:
+        canvas.put(
+            position.x,
+            position.y,
+            theme.structure_glyph(entry.structure, ascii_mode=ascii_mode),
+            fg=color,
+            bg=background,
+        )
+
+
+def _weather_overlay(
+    position: Position,
+    weather: WeatherState,
+    tick: int,
+    ascii_mode: bool,
+) -> tuple[str, theme.RGB] | None:
+    """Return a deterministic weather overlay glyph for one visible cell."""
+    seed = (
+        (position.x * 73_856_093)
+        ^ (position.y * 19_349_663)
+        ^ (tick * 83_492_791)
+        ^ (weather.remaining_ticks * 2_654_435_761)
+    )
+    if weather.kind in {WeatherKind.RAIN, WeatherKind.STORM} and seed % 9 == 0:
+        glyph = theme.ASCII_RAIN_GLYPH if ascii_mode else theme.WEATHER_RAIN_GLYPH
+        return glyph, theme.WEATHER_RAIN_COLOR
+    if weather.wind > 0 and seed % 23 == 0:
+        return theme.WEATHER_WIND_GLYPH, theme.WEATHER_WIND_COLOR
+    if weather.kind is WeatherKind.FOG and seed % 5 == 0:
+        return theme.WEATHER_FOG_GLYPH, theme.WEATHER_FOG_COLOR
+    return None
 
 
 def _render_ticker(canvas: _Canvas, events: Sequence[str], ascii_mode: bool) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from iasim.domain.tiles import TileType
+from iasim.domain.world import StructureKind
 
 RGB = tuple[int, int, int]
 
@@ -50,6 +51,43 @@ ASCII_HORIZONTAL = "-"
 def tile_glyph(tile: TileType, *, ascii_mode: bool = False) -> str:
     """Return the map glyph for a tile, using the ASCII fallback when requested."""
     return ASCII_TILE_GLYPHS[tile] if ascii_mode else TILE_GLYPHS[tile]
+
+
+STRUCTURE_GLYPHS: dict[StructureKind, str] = {
+    StructureKind.FIRE: "▲",
+    StructureKind.SHELTER: "⌂",
+    StructureKind.WORKBENCH: "≡",
+}
+ASCII_STRUCTURE_GLYPHS: dict[StructureKind, str] = {
+    StructureKind.FIRE: "*",
+    StructureKind.SHELTER: "n",
+    StructureKind.WORKBENCH: "=",
+}
+STRUCTURE_COLORS: dict[StructureKind, RGB] = {
+    StructureKind.FIRE: (250, 140, 70),
+    StructureKind.SHELTER: (200, 170, 120),
+    StructureKind.WORKBENCH: (190, 150, 100),
+}
+CORPSE_GLYPH = "†"
+ASCII_CORPSE_GLYPH = "x"
+CORPSE_COLOR: RGB = (200, 190, 190)
+GROUND_ITEM_GLYPH = "•"
+ASCII_GROUND_ITEM_GLYPH = "!"
+GROUND_ITEM_COLOR: RGB = (240, 220, 120)
+MEMORY_COLOR: RGB = (78, 108, 116)
+STALE_MEMORY_COLOR: RGB = (52, 66, 72)
+WEATHER_RAIN_GLYPH = "/"
+ASCII_RAIN_GLYPH = "'"
+WEATHER_WIND_GLYPH = "~"
+WEATHER_FOG_GLYPH = "·"
+WEATHER_RAIN_COLOR: RGB = (80, 130, 170)
+WEATHER_WIND_COLOR: RGB = (120, 160, 200)
+WEATHER_FOG_COLOR: RGB = (140, 140, 140)
+
+
+def structure_glyph(kind: StructureKind, *, ascii_mode: bool = False) -> str:
+    """Return the map glyph for a structure."""
+    return ASCII_STRUCTURE_GLYPHS[kind] if ascii_mode else STRUCTURE_GLYPHS[kind]
 
 
 TILE_COLORS: dict[TileType, RGB] = {
