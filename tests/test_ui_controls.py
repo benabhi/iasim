@@ -94,6 +94,12 @@ class UiControlTests(unittest.TestCase):
         self.assertIsNone(cancelled.pending_confirmation)
         self.assertFalse(cancelled.quit_requested)
 
+    def test_w_toggles_the_weather_overlay(self) -> None:
+        state = handle_key(UiState(), "w", AGENTS)
+
+        self.assertFalse(state.weather_overlay)
+        self.assertTrue(handle_key(state, "w", AGENTS).weather_overlay)
+
     def test_bracket_keys_cycle_panel_tabs(self) -> None:
         state = handle_key(UiState(), "]", AGENTS)
         self.assertEqual(state.panel.tab, RightPanelTab.EVENTS)

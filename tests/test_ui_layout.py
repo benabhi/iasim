@@ -11,12 +11,15 @@ from iasim.domain.alliances import Alliance, AllianceStatus, alliance_id_for
 from iasim.domain.corpse import Corpse
 from iasim.domain.geometry import Position
 from iasim.domain.identifiers import AgentId, ItemId
-from iasim.domain.items import Inventory, ItemStack
+from iasim.domain.items import GroundItem, Inventory, ItemStack
+from iasim.domain.memory import AgentMemory, Memory, MemoryEntry
 from iasim.domain.mind import MindReport
 from iasim.domain.session import SessionState
 from iasim.domain.tiles import TileType, WorldMap
 from iasim.domain.trades import TradeOffer
 from iasim.domain.usage import AgentUsage, CostSource, UsageEntry
+from iasim.domain.weather import WeatherKind, WeatherState
+from iasim.domain.world import Structure, StructureKind
 from iasim.ui import theme
 from iasim.ui.layout import render_base_screen, render_help_screen
 from iasim.ui.panel import PanelState, RightPanelTab
@@ -488,6 +491,184 @@ class TabbedPanelTests(unittest.TestCase):
 
         self.assertIn("> EVENTOS", panel)
         self.assertNotIn("◆", panel)
+
+
+class MapLayerTests(unittest.TestCase):
+    def _grassy_state(self, *, weather: WeatherState | None = None) -> SessionState:
+        return SessionState(
+            seed=9,
+            tick=5,
+            rng_state=9,
+            world=WorldMap(width=8, height=8, tiles=(TileType.GRASS,) * 64),
+            weather=weather or WeatherState(),
+            agents=(Agent(AgentId("ag_01"), Position(2, 2)),),
+        )
+
+    def _state_with_entities(self) -> SessionState:
+        catalog = load_catalog()
+        tiles = [TileType.GRASS] * 64
+        tiles[1 * 8 + 1] = TileType.FIRE
+        return SessionState(
+            seed=9,
+            tick=5,
+            rng_state=9,
+            world=WorldMap(width=8, height=8, tiles=tuple(tiles)),
+            weather=WeatherState(kind=WeatherKind.RAIN, remaining_ticks=5, wind=3),
+            agents=(Agent(AgentId("ag_01"), Position(4, 1)),),
+            structures=(Structure(StructureKind.FIRE, Position(1, 1), lit=True),),
+            ground_items=(
+                GroundItem(
+                    Position(3, 1),
+                    ItemStack(catalog.item("wood").definition, 1),
+                ),
+            ),
+            corpses=(
+                Corpse.from_agent(
+                    Agent(AgentId("ag_02"), Position(2, 1)),
+                    tick=4,
+                    cause="starvation",
+                ),
+            ),
+        )
+
+    def test_the_operator_sees_the_complete_map(self) -> None:
+        state = self._grassy_state()
+
+        screen = render_base_screen(state, {AgentId("ag_01"): "Nia"})
+
+        for y in range(8):
+            for x in range(8):
+                if (x, y) == (2, 2):
+                    self.assertEqual(screen.cell_at(x, y).char, "@")
+                    continue
+                self.assertEqual(
+                    screen.cell_at(x, y).char,
+                    theme.tile_glyph(TileType.GRASS),
+                )
+
+    def test_entities_render_with_distinct_glyphs_and_colors(self) -> None:
+        state = self._state_with_entities()
+
+        screen = render_base_screen(state, {}, weather_overlay=True)
+
+        fire = screen.cell_at(1, 1)
+        corpse = screen.cell_at(2, 1)
+        item = screen.cell_at(3, 1)
+        agent = screen.cell_at(4, 1)
+        self.assertEqual(fire.char, theme.STRUCTURE_GLYPHS[StructureKind.FIRE])
+        self.assertEqual(fire.fg, theme.STRUCTURE_COLORS[StructureKind.FIRE])
+        self.assertEqual(corpse.char, theme.CORPSE_GLYPH)
+        self.assertEqual(corpse.fg, theme.CORPSE_COLOR)
+        self.assertEqual(item.char, theme.GROUND_ITEM_GLYPH)
+        self.assertEqual(item.fg, theme.GROUND_ITEM_COLOR)
+        self.assertEqual(agent.char, "@")
+        self.assertEqual(agent.fg, theme.AGENT_COLOR)
+        self.assertEqual(len({fire.fg, corpse.fg, item.fg, agent.fg}), 4)
+
+    def test_weather_overlays_are_deterministic_and_do_not_hide_entities(self) -> None:
+        state = self._state_with_entities()
+
+        first = render_base_screen(state, {}, weather_overlay=True)
+        second = render_base_screen(state, {}, weather_overlay=True)
+        without = render_base_screen(state, {}, weather_overlay=False)
+
+        self.assertEqual(first.to_text(), second.to_text())
+        self.assertNotEqual(first.to_text(), without.to_text())
+        weather_glyphs = {
+            theme.WEATHER_RAIN_GLYPH,
+            theme.WEATHER_WIND_GLYPH,
+            theme.WEATHER_FOG_GLYPH,
+        }
+        map_glyphs = {first.cell_at(x, y).char for y in range(40) for x in range(80)}
+        self.assertTrue(map_glyphs & weather_glyphs)
+        self.assertFalse(
+            {without.cell_at(x, y).char for y in range(40) for x in range(80)} & weather_glyphs
+        )
+        self.assertEqual(
+            first.cell_at(1, 1).char,
+            theme.STRUCTURE_GLYPHS[StructureKind.FIRE],
+        )
+
+    def test_weather_is_visible_in_the_environment_section(self) -> None:
+        state = self._state_with_entities()
+
+        screen = render_base_screen(state, {}, selected_agent_id=AgentId("ag_01"))
+
+        panel = "\n".join(screen.row_text(y)[80:] for y in range(44))
+        self.assertIn("LLUVIA", panel)
+
+    def test_focus_mode_uses_memory_and_hides_unseen_cells(self) -> None:
+        memory = Memory(
+            tiles=(
+                MemoryEntry(Position(30, 30), TileType.SAND, 3),
+                MemoryEntry(Position(31, 30), TileType.TREE, 2, stale=True),
+                MemoryEntry(
+                    Position(30, 31),
+                    TileType.GRASS,
+                    2,
+                    structure=StructureKind.FIRE,
+                ),
+            ),
+            agents=(AgentMemory(AgentId("ag_02"), Position(29, 29), 3),),
+        )
+        state = SessionState(
+            seed=9,
+            tick=5,
+            rng_state=9,
+            world=WorldMap(width=40, height=40, tiles=(TileType.GRASS,) * 1600),
+            agents=(
+                Agent(AgentId("ag_01"), Position(1, 1), memory=memory),
+                Agent(AgentId("ag_02"), Position(20, 20)),
+            ),
+            ground_items=(
+                GroundItem(
+                    Position(35, 20),
+                    ItemStack(CATALOG.item("wood").definition, 1),
+                ),
+            ),
+        )
+
+        screen = render_base_screen(
+            state,
+            {AgentId("ag_01"): "Nia", AgentId("ag_02"): "Kai"},
+            selected_agent_id=AgentId("ag_01"),
+            focus_mode=True,
+            weather_overlay=False,
+        )
+
+        remembered = screen.cell_at(30, 30)
+        stale = screen.cell_at(31, 30)
+        familiar = screen.cell_at(30, 31)
+        unseen = screen.cell_at(35, 35)
+        self.assertEqual(remembered.char, theme.tile_glyph(TileType.SAND))
+        self.assertEqual(remembered.fg, theme.MEMORY_COLOR)
+        self.assertEqual(stale.char, theme.tile_glyph(TileType.TREE))
+        self.assertEqual(stale.fg, theme.STALE_MEMORY_COLOR)
+        self.assertEqual(
+            familiar.char,
+            theme.STRUCTURE_GLYPHS[StructureKind.FIRE],
+        )
+        self.assertEqual(unseen.char, " ")
+        self.assertEqual(unseen.bg, theme.BLACK)
+        self.assertEqual(screen.cell_at(29, 29).char, "…")
+        hidden_item = screen.cell_at(35, 20)
+        self.assertNotEqual(hidden_item.char, theme.GROUND_ITEM_GLYPH)
+
+    def test_focus_keeps_visible_entities_normal(self) -> None:
+        state = self._state_with_entities()
+
+        screen = render_base_screen(
+            state,
+            {},
+            selected_agent_id=AgentId("ag_01"),
+            focus_mode=True,
+        )
+
+        self.assertEqual(screen.cell_at(4, 1).char, "@")
+        self.assertEqual(
+            screen.cell_at(1, 1).char,
+            theme.STRUCTURE_GLYPHS[StructureKind.FIRE],
+        )
 
 
 if __name__ == "__main__":
