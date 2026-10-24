@@ -31,7 +31,7 @@ class MindReportTests(unittest.TestCase):
     def test_report_is_stored_and_logged_once(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "thoughts.jsonl"
-            session = GameSession(42, layout=_layout(), mind_log_path=path)
+            session = GameSession(42, layout=_layout(), log_dir=Path(directory))
             agent_id = session.join("Nia", session.tokens[0])["agent_id"]
 
             result = session.report_mind(

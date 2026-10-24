@@ -153,7 +153,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 weather_min_ticks=config.weather.weather_min_ticks,
                 weather_max_ticks=config.weather.weather_max_ticks,
                 usage_pricing=_usage_pricing(config),
-                mind_log_path=run_dir / "thoughts.jsonl",
+                log_dir=run_dir,
             )
             run_server(session, host=config.mcp.host, port=config.mcp.port)
         except KeyboardInterrupt:
