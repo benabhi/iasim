@@ -483,9 +483,9 @@ energia  -= 0.25 × factor_actividad
   - atacar a un aliado se registra como traición para métricas.
 - Comercio:
   - `offer_trade` con ítems ofrecidos y solicitados;
-  - debe estar a ≤ 2 celdas del destinatario;
-  - la oferta vence a los 5 ticks;
-  - `accept_trade` ejecuta un intercambio atómico; si falta un ítem o cambió el inventario, falla;
+  - debe estar a ≤ 2 celdas del destinatario; el rango se revalida al aceptar;
+  - una oferta hecha en el tick `T` vale en `T+1`…`T+4` y caduca al llegar a `T+5`;
+  - `accept_trade` ejecuta un intercambio atómico; si falta un ítem o cambió el inventario, falla y la oferta queda abierta hasta vencer;
   - `decline_trade` cancela.
 - No hay reputación numérica ni confianza mecánica: las alianzas son un estado social declarado y las traiciones se registran solo para métricas. La confianza debe emerger de la interacción entre agentes, no de una puntuación del juego.
 - El texto de chat y de pensamiento es dato no confiable: se sanea, se trunca y nunca se ejecuta.

@@ -12,6 +12,7 @@ from iasim.domain.corpse import Corpse
 from iasim.domain.items import GroundItem, ItemStack
 from iasim.domain.resources import ResourceNode
 from iasim.domain.session import SessionState
+from iasim.domain.trades import TradeOffer
 from iasim.domain.world import Structure
 
 
@@ -93,6 +94,10 @@ def canonical_state_payload(state: SessionState) -> dict[str, Any]:
         "alliances": [
             _alliance_payload(alliance)
             for alliance in sorted(state.alliances, key=lambda alliance: alliance.alliance_id)
+        ],
+        "trades": [
+            _trade_payload(trade)
+            for trade in sorted(state.trades, key=lambda trade: trade.trade_id)
         ],
     }
 
@@ -235,4 +240,17 @@ def _alliance_payload(alliance: Alliance) -> dict[str, Any]:
         "offered_tick": alliance.offered_tick,
         "accepted_tick": alliance.accepted_tick,
         "broken_tick": alliance.broken_tick,
+    }
+
+
+def _trade_payload(trade: TradeOffer) -> dict[str, Any]:
+    return {
+        "trade_id": trade.trade_id,
+        "proposer_id": str(trade.proposer_id),
+        "target_id": str(trade.target_id),
+        "offered_tick": trade.offered_tick,
+        "offer": [{"item_id": item_id, "qty": qty} for item_id, qty in trade.offer],
+        "request": [{"item_id": item_id, "qty": qty} for item_id, qty in trade.request],
+        "status": trade.status.value,
+        "resolved_tick": trade.resolved_tick,
     }
