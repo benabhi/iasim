@@ -97,6 +97,7 @@ class GameSessionTests(unittest.TestCase):
                 "build",
                 "use",
                 "attack",
+                "throw",
                 "flee",
                 "loot",
                 "offer_alliance",

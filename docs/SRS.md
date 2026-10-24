@@ -493,7 +493,7 @@ energia  -= 0.25 × factor_actividad
 ### 3.10 Combate y muerte
 
 - `attack`: cuerpo a cuerpo contra un objetivo adyacente.
-- `throw`: piedra a un objetivo a ≤ 4 celdas; consume la piedra.
+- `throw`: piedra a un objetivo a ≤ 4 celdas con línea de visión; la piedra se consume al ejecutarse el lanzamiento, también si falla el impacto, pero no si la acción se rechaza.
 - Probabilidad de impacto:
   `0.65 + 0.04 × (destreza_atacante - destreza_defensor) - 0.10 × (distancia - 1)`, limitada a 0.25–0.95.
 - Daño:
