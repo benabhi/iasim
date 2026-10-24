@@ -15,6 +15,9 @@ from typing import Any
 from iasim.app.session import GameSession
 from iasim.crafting import Catalog, load_catalog
 from iasim.domain.hashing import canonical_state_hash
+from iasim.domain.identifiers import AgentId
+from iasim.domain.mind import MindReport
+from iasim.domain.session import SessionState
 from iasim.persistence.replay import ReplayError, ReplayRecord, read_replay
 from iasim.persistence.state import action_from_payload, read_session_file
 
@@ -204,3 +207,88 @@ def _start_from_snapshot(
         )
     action_offset = sum(len(turn.actions) for turn in record.turns if turn.tick <= start_tick)
     return session, start_tick, action_offset, None
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayFrame:
+    """One observable frame of a replay: state, actions, and reported minds."""
+
+    tick: int
+    state: SessionState
+    actions: tuple[str, ...]
+    minds: tuple[MindReport, ...]
+
+
+def replay_frames(
+    replay_path: Path,
+    *,
+    from_snapshot: Path | None = None,
+    catalog: Catalog | None = None,
+) -> tuple[ReplayFrame, ...]:
+    """Rebuild a replay as frames for the operator UI without live agents."""
+    record = read_replay(replay_path)
+    resolved_catalog = catalog if catalog is not None else load_catalog()
+    if from_snapshot is None:
+        session, start_tick, _, failure = _start_from_seed(record)
+    else:
+        session, start_tick, _, failure = _start_from_snapshot(
+            record,
+            from_snapshot,
+            resolved_catalog,
+        )
+    if failure is not None:
+        raise ReplayError(failure.detail or "replay setup failed")
+    frames: list[ReplayFrame] = [
+        ReplayFrame(
+            tick=start_tick,
+            state=session.state,
+            actions=(),
+            minds=(),
+        )
+    ]
+    minds: dict[AgentId, MindReport] = {}
+    for turn in record.turns:
+        if turn.tick <= start_tick:
+            continue
+        actions: list[str] = []
+        for action_payload in turn.actions:
+            action = action_from_payload(action_payload)
+            result = session.submit_action(action)
+            if not result.get("ok"):
+                raise ReplayError(
+                    f"recorded action was rejected at tick {turn.tick}: {result.get('error')}"
+                )
+            actions.append(action.kind.value)
+        if session.state.tick == turn.tick - 1 and turn.resolved_by == "deadline":
+            session.resolve_turn_by_deadline()
+        if session.state.tick != turn.tick or session.state_hash != turn.state_hash:
+            raise ReplayError(f"replay diverged at tick {turn.tick}")
+        for payload in turn.minds:
+            report = _mind_from_payload(payload)
+            if report is not None:
+                minds[report.agent_id] = report
+        frames.append(
+            ReplayFrame(
+                tick=turn.tick,
+                state=session.state,
+                actions=tuple(actions),
+                minds=tuple(sorted(minds.values(), key=lambda report: str(report.agent_id))),
+            )
+        )
+    return tuple(frames)
+
+
+def _mind_from_payload(payload: dict[str, Any]) -> MindReport | None:
+    try:
+        return MindReport(
+            agent_id=AgentId(str(payload["agent_id"])),
+            tick=int(payload["tick"]),
+            intent=str(payload["intent"]),
+            thought=str(payload["thought"]),
+            plan=str(payload["plan"]) if payload.get("plan") is not None else None,
+            confidence=(
+                int(payload["confidence"]) if payload.get("confidence") is not None else None
+            ),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None

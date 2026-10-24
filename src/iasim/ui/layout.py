@@ -55,6 +55,7 @@ BOTTOM_BAR = (
 )
 
 HELP_FOOTER = "ESC volver │ F1 cerrar ayuda │ A ASCII │ Q/R requieren confirmación"
+REPLAY_FOOTER = "[ESPACIO] Pausa│[←/→] Tick│[Inicio/Fin] Inicio/Fin│[F5] Salir del replay"
 
 _SHEET_COLUMN_WIDTH = 50
 _SHEET_HEIGHT = 40
@@ -256,6 +257,8 @@ def render_base_screen(
     weather_overlay: bool = True,
     cursor: Position | None = None,
     inspection_pinned: bool = False,
+    banner: str | None = None,
+    footer: str | None = None,
 ) -> BaseScreen:
     """Render the deterministic base screen without mutating the session."""
     canvas = _Canvas()
@@ -269,9 +272,7 @@ def render_base_screen(
         weather_overlay=weather_overlay,
         cursor=cursor,
     )
-    if cursor is None:
-        _render_ticker(canvas, events, ascii_mode)
-    else:
+    if cursor is not None:
         detail = describe_position(
             state,
             names,
@@ -284,6 +285,10 @@ def render_base_screen(
             ascii_mode=ascii_mode,
             pinned=inspection_pinned,
         )
+    elif banner is not None:
+        _render_banner_ticker(canvas, banner, ascii_mode)
+    else:
+        _render_ticker(canvas, events, ascii_mode)
     _render_panel(
         canvas,
         state,
@@ -301,8 +306,50 @@ def render_base_screen(
         messages=messages,
         betrayals=betrayals,
     )
-    _render_bottom_bar(canvas, ascii_mode)
+    _render_bottom_bar(canvas, ascii_mode, override=footer)
     return canvas.to_screen()
+
+
+def render_replay_screen(
+    state: SessionState,
+    names: Mapping[AgentId, str],
+    *,
+    tick: int,
+    total_ticks: int,
+    paused: bool = True,
+    selected_agent_id: AgentId | None = None,
+    events: Sequence[str] = (),
+    capacity: int = 8,
+    ascii_mode: bool = False,
+    focus_mode: bool = False,
+    usage: Mapping[AgentId, AgentUsage] | None = None,
+    mind_reports: Mapping[AgentId, MindReport] | None = None,
+    panel: PanelState | None = None,
+    messages: Sequence[str] = (),
+    betrayals: Sequence[str] = (),
+    weather_overlay: bool = True,
+) -> BaseScreen:
+    """Render the replay base layout with a REPLAY banner and tick counter."""
+    status = "PAUSA" if paused else "EN CURSO"
+    banner = f"REPLAY · TICK {tick}/{total_ticks} · {status}"
+    return render_base_screen(
+        state,
+        names,
+        selected_agent_id=selected_agent_id,
+        events=events,
+        paused=paused,
+        capacity=capacity,
+        ascii_mode=ascii_mode,
+        focus_mode=focus_mode,
+        usage=usage,
+        mind_reports=mind_reports,
+        panel=panel,
+        messages=messages,
+        betrayals=betrayals,
+        weather_overlay=weather_overlay,
+        banner=banner,
+        footer=REPLAY_FOOTER,
+    )
 
 
 def render_agent_screen(
@@ -1250,6 +1297,23 @@ def _render_ticker(canvas: _Canvas, events: Sequence[str], ascii_mode: bool) -> 
         canvas.put(1, TICKER_Y + 2 + offset, line, fg=theme.WHITE, bg=theme.BLACK)
 
 
+def _render_banner_ticker(canvas: _Canvas, banner: str, ascii_mode: bool) -> None:
+    canvas.hline(
+        0,
+        TICKER_Y,
+        MAP_WIDTH,
+        char=theme.ASCII_HORIZONTAL if ascii_mode else "─",
+    )
+    canvas.put(
+        1,
+        TICKER_Y + 1,
+        _clip(banner, MAP_WIDTH - 2),
+        fg=theme.CURSOR_FG,
+        bg=theme.BLACK,
+        bold=True,
+    )
+
+
 def _render_inspection_ticker(
     canvas: _Canvas,
     lines: Sequence[str],
@@ -1867,8 +1931,14 @@ def _render_scroll_window(
     _panel(canvas, BOTTOM_BAR_Y - 1, indicator, fg=theme.DIM)
 
 
-def _render_bottom_bar(canvas: _Canvas, ascii_mode: bool) -> None:
-    bar = BOTTOM_BAR.replace("│", theme.ASCII_VERTICAL) if ascii_mode else BOTTOM_BAR
+def _render_bottom_bar(
+    canvas: _Canvas,
+    ascii_mode: bool,
+    *,
+    override: str | None = None,
+) -> None:
+    bar = override if override is not None else BOTTOM_BAR
+    bar = bar.replace("│", theme.ASCII_VERTICAL) if ascii_mode else bar
     text = (bar + " " * SCREEN_WIDTH)[:SCREEN_WIDTH]
     canvas.put(0, BOTTOM_BAR_Y, text, fg=theme.BAR_FG, bg=theme.BAR_BG, bold=True)
 

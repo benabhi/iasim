@@ -31,6 +31,7 @@ KEY_GUIDE: tuple[tuple[str, str], ...] = (
     ("F2", "Abrir / cerrar ficha completa del agente"),
     ("F3", "Abrir / cerrar resumen del mundo"),
     ("F4", "Abrir / cerrar registro de eventos"),
+    ("F5", "Reproducir la sesión actual"),
     ("F6", "Abrir / cerrar mapa ampliado"),
     ("/", "Buscar en el registro de eventos"),
     ("T / A", "Filtrar eventos por tipo o agente"),
@@ -72,6 +73,7 @@ class UiView(StrEnum):
     WORLD_SUMMARY = "world_summary"
     EVENT_LOG = "event_log"
     MAP_VIEW = "map_view"
+    REPLAY = "replay"
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +99,9 @@ class UiState:
     event_search_open: bool = False
     cursor: Position | None = None
     inspection_pinned: bool = False
+    replay_tick: int = 0
+    replay_total: int = 0
+    replay_paused: bool = True
 
 
 def handle_key(
@@ -105,6 +110,7 @@ def handle_key(
     agent_ids: Sequence[AgentId],
     *,
     world_size: tuple[int, int] | None = None,
+    replay_total: int | None = None,
 ) -> UiState:
     """Apply one keyboard event and return the next presentation state."""
     normalized = _normalize_key(key)
@@ -172,6 +178,34 @@ def handle_key(
     if normalized == "f6":
         view = UiView.NONE if state.view is UiView.MAP_VIEW else UiView.MAP_VIEW
         return replace(state, view=view)
+
+    if normalized == "f5":
+        if state.view is UiView.REPLAY:
+            return replace(state, view=UiView.NONE)
+        total = replay_total if replay_total is not None else state.replay_total
+        return replace(
+            state,
+            view=UiView.REPLAY,
+            replay_tick=0,
+            replay_total=max(1, total),
+            replay_paused=True,
+        )
+
+    if state.view is UiView.REPLAY:
+        total = max(1, replay_total if replay_total is not None else state.replay_total)
+        if normalized == "space":
+            return replace(state, replay_paused=not state.replay_paused)
+        if normalized == "left":
+            return replace(state, replay_tick=max(0, state.replay_tick - 1))
+        if normalized == "right":
+            return replace(
+                state,
+                replay_tick=min(total - 1, state.replay_tick + 1),
+            )
+        if normalized == "home":
+            return replace(state, replay_tick=0)
+        if normalized == "end":
+            return replace(state, replay_tick=total - 1)
 
     if normalized == "enter" and state.view is UiView.WORLD_SUMMARY:
         return replace(state, view=UiView.AGENT_SHEET)

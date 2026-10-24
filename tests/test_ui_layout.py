@@ -26,6 +26,7 @@ from iasim.ui.layout import (
     render_base_screen,
     render_help_screen,
     render_map_screen,
+    render_replay_screen,
     render_world_screen,
 )
 from iasim.ui.panel import PanelState, RightPanelTab
@@ -1216,6 +1217,48 @@ class ConnectionLifecycleTests(unittest.TestCase):
 
         self.assertIn("CADÁVER", panel)
         self.assertIn("Botín: wood x2", panel)
+
+
+class ReplayScreenTests(unittest.TestCase):
+    def test_the_replay_screen_reuses_the_base_layout_with_a_banner(self) -> None:
+        state = _state()
+        screen = render_replay_screen(
+            state,
+            NAMES,
+            tick=2,
+            total_ticks=5,
+            paused=True,
+            selected_agent_id=AgentId("ag_01"),
+        )
+        text = screen.to_text()
+
+        self.assertEqual((screen.width, screen.height), (160, 45))
+        self.assertTrue(all(len(screen.row_text(y)) == 160 for y in range(45)))
+        for expected in (
+            "REPLAY · TICK 2/5 · PAUSA",
+            "AGENTES",
+            "AGENTE SELECCIONADO",
+            "MENTE (REPORTADO)",
+            "ENTORNO",
+            "RELACIONES",
+            "EVENTOS",
+            "[←/→] Tick",
+            "[F5] Salir del replay",
+        ):
+            self.assertIn(expected, text)
+        agent = state.agents[0]
+        self.assertEqual(screen.cell_at(agent.position.x, agent.position.y).char, "@")
+
+    def test_the_replay_banner_reflects_playback_state(self) -> None:
+        screen = render_replay_screen(
+            _state(),
+            NAMES,
+            tick=0,
+            total_ticks=3,
+            paused=False,
+        )
+
+        self.assertIn("REPLAY · TICK 0/3 · EN CURSO", screen.to_text())
 
 
 if __name__ == "__main__":

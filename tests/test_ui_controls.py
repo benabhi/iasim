@@ -184,6 +184,45 @@ class UiControlTests(unittest.TestCase):
 
         self.assertEqual(handle_key(state, "esc", AGENTS), state)
 
+    def test_f5_replay_steps_and_closes(self) -> None:
+        state = handle_key(UiState(), "f5", AGENTS, replay_total=5)
+
+        self.assertEqual(state.view, UiView.REPLAY)
+        self.assertEqual(state.replay_tick, 0)
+        self.assertEqual(state.replay_total, 5)
+        self.assertTrue(state.replay_paused)
+
+        state = handle_key(state, "right", AGENTS, replay_total=5)
+        self.assertEqual(state.replay_tick, 1)
+        state = handle_key(state, "end", AGENTS, replay_total=5)
+        self.assertEqual(state.replay_tick, 4)
+        state = handle_key(state, "right", AGENTS, replay_total=5)
+        self.assertEqual(state.replay_tick, 4)
+        state = handle_key(state, "left", AGENTS, replay_total=5)
+        self.assertEqual(state.replay_tick, 3)
+        state = handle_key(state, "home", AGENTS, replay_total=5)
+        self.assertEqual(state.replay_tick, 0)
+        state = handle_key(state, "space", AGENTS, replay_total=5)
+        self.assertFalse(state.replay_paused)
+        self.assertFalse(state.paused)
+        self.assertEqual(
+            handle_key(state, "esc", AGENTS, replay_total=5).view,
+            UiView.NONE,
+        )
+        self.assertEqual(
+            handle_key(UiState(), "f5", AGENTS, replay_total=5).view,
+            UiView.REPLAY,
+        )
+        self.assertEqual(
+            handle_key(
+                handle_key(UiState(), "f5", AGENTS, replay_total=5),
+                "f5",
+                AGENTS,
+                replay_total=5,
+            ).view,
+            UiView.NONE,
+        )
+
     def test_key_guide_covers_critical_controls(self) -> None:
         keys = {key for key, _ in KEY_GUIDE}
 
