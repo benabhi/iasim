@@ -1632,7 +1632,12 @@ Las métricas se calculan por agente y por sesión. Se guardan en `summary.json`
 | `messages_sent` | Mensajes `say` enviados. |
 | `trades_offered` | Ofertas de intercambio. |
 | `trades_completed` | Intercambios ejecutados. |
+| `trades_declined` | Ofertas de intercambio rechazadas. |
+| `alliances_offered` | Ofertas de alianza. |
 | `alliances_formed` | Alianzas aceptadas. |
+| `alliances_broken` | Alianzas rotas por alguno de sus miembros. |
+| `alliances_withdrawn` | Ofertas de alianza retiradas por el proponente. |
+| `alliances_declined` | Ofertas de alianza rechazadas por el destinatario. |
 | `betrayals` | Ataques a aliados. |
 | `attacks_made` | Ataques y arrojamientos. |
 | `damage_dealt` | Daño total infligido. |

@@ -15,6 +15,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from iasim.app.social import SocialEvent, SocialEventKind, SocialLedger
 from iasim.crafting import Catalog, load_catalog
 from iasim.domain.actions import Action, ActionKind
 from iasim.domain.agents import Agent, AgentProfile, AgentStatus
@@ -81,6 +82,7 @@ from iasim.domain.turns import (
     ActionRejectedError,
     ResolvedAction,
     TurnEngine,
+    TurnEvent,
     TurnResult,
 )
 from iasim.domain.usage import AgentUsage, CostSource, ModelPricing, UsageEntry
@@ -205,6 +207,8 @@ class GameSession:
         self._wall_clock = wall_clock
         self._turn_deadline: float | None = None
         self._timeouts: dict[AgentId, int] = {}
+        self._pending_actions: dict[AgentId, Action] = {}
+        self._social = SocialLedger()
         self._max_agents = configured_max
         self._token_path = token_path
         self._catalog = catalog if catalog is not None else load_catalog()
@@ -408,6 +412,7 @@ class GameSession:
             self._mind_reports.pop(agent_id, None)
             self._mind_tick.pop(agent_id, None)
             self._timeouts.pop(agent_id, None)
+            self._pending_actions.pop(agent_id, None)
             self._joined_slots.add(slot)
             self._token_agents[token] = agent_id
             self._update_phase_locked()
@@ -461,6 +466,7 @@ class GameSession:
             self._mind_reports.pop(target, None)
             self._mind_tick.pop(target, None)
             self._timeouts.pop(target, None)
+            self._pending_actions.pop(target, None)
             if token is not None:
                 self._token_agents.pop(token, None)
                 slot = self._token_slots.get(token)
@@ -877,6 +883,14 @@ class GameSession:
                 )
             )
             self._said_tick[target] = self._state.tick
+            self._social.record(
+                SocialEvent(
+                    tick=self._state.tick,
+                    kind=SocialEventKind.MESSAGE,
+                    agent_id=target,
+                    target_id=target_agent_id,
+                )
+            )
             return {
                 "ok": True,
                 "schema_version": SCHEMA_VERSION,
@@ -1453,6 +1467,7 @@ class GameSession:
                 return self._error("INTERNAL_ERROR", str(exc), tick=action.tick)
 
             self._timeouts.pop(target, None)
+            self._pending_actions[target] = action
             if self._turn_deadline is None:
                 self._turn_deadline = self._wall_clock() + self._turn_timeout_ms / 1000.0
             self._resolve_if_complete()
@@ -1623,6 +1638,7 @@ class GameSession:
     def _record_result(self, result: TurnResult) -> None:
         recorded: dict[AgentId, dict[str, Any]] = {}
         for event in result.events:
+            self._record_social_event_locked(event)
             # The first event of an agent carries its primary action outcome;
             # later events are annotations such as a betrayal and never replace it.
             if event.agent_id in recorded:
@@ -1655,6 +1671,32 @@ class GameSession:
                 "outcome": event.outcome,
             }
         self._last_results.update(recorded)
+        self._pending_actions.clear()
+
+    def _record_social_event_locked(self, event: TurnEvent) -> None:
+        action = self._pending_actions.get(event.agent_id)
+        target_id: AgentId | None = None
+        if action is not None:
+            raw_target = action.payload_dict().get("target_id")
+            if isinstance(raw_target, str) and raw_target:
+                target_id = AgentId(raw_target)
+        self._social.record_outcome(
+            tick=event.tick,
+            agent_id=event.agent_id,
+            action_kind=event.kind.value,
+            outcome=event.outcome,
+            target_id=target_id,
+        )
+
+    def social_metrics(self) -> dict[str, Any]:
+        """Return the social counters per session and per agent."""
+        with self._lock:
+            return self._social.snapshot()
+
+    def social_events(self) -> tuple[SocialEvent, ...]:
+        """Return the ordered social event log for the operator and the logs."""
+        with self._lock:
+            return self._social.events
 
     def _resource_ids_at(self, state: SessionState, position: Position) -> tuple[str, ...]:
         tile = state.world.tile_at(position)
