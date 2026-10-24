@@ -33,6 +33,7 @@ KEY_GUIDE: tuple[tuple[str, str], ...] = (
     ("F4", "Abrir / cerrar registro de eventos"),
     ("F5", "Reproducir la sesión actual"),
     ("F6", "Abrir / cerrar mapa ampliado"),
+    ("F7", "Abrir / cerrar métricas de la sesión"),
     ("/", "Buscar en el registro de eventos"),
     ("T / A", "Filtrar eventos por tipo o agente"),
     ("PgUp/PgDn", "Paginar el registro de eventos"),
@@ -74,6 +75,7 @@ class UiView(StrEnum):
     EVENT_LOG = "event_log"
     MAP_VIEW = "map_view"
     REPLAY = "replay"
+    METRICS = "metrics"
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,6 +179,10 @@ def handle_key(
 
     if normalized == "f6":
         view = UiView.NONE if state.view is UiView.MAP_VIEW else UiView.MAP_VIEW
+        return replace(state, view=view)
+
+    if normalized == "f7":
+        view = UiView.NONE if state.view is UiView.METRICS else UiView.METRICS
         return replace(state, view=view)
 
     if normalized == "f5":
