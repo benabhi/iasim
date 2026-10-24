@@ -44,6 +44,12 @@ BOTTOM_BAR = (
 
 HELP_FOOTER = "ESC volver │ F1 cerrar ayuda │ A ASCII │ Q/R requieren confirmación"
 
+_SHEET_COLUMN_WIDTH = 50
+_SHEET_HEIGHT = 40
+_SHEET_CENTER_X = 53
+_SHEET_RIGHT_X = 106
+_SHEET_TIMELINE_LIMIT = 20
+
 _PHASE_LABELS: dict[DayPhase, str] = {
     DayPhase.DAWN: "AMANECER",
     DayPhase.DAY: "DÍA",
@@ -249,6 +255,230 @@ def render_base_screen(
     )
     _render_bottom_bar(canvas, ascii_mode)
     return canvas.to_screen()
+
+
+def render_agent_screen(
+    state: SessionState,
+    names: Mapping[AgentId, str],
+    *,
+    selected_agent_id: AgentId | None = None,
+    usage: Mapping[AgentId, AgentUsage] | None = None,
+    mind_reports: Mapping[AgentId, MindReport] | None = None,
+    timeline: Sequence[str] = (),
+    messages: Sequence[str] = (),
+    betrayals: Sequence[str] = (),
+    ascii_mode: bool = False,
+) -> BaseScreen:
+    """Render the full-screen F2 agent sheet in three columns."""
+    canvas = _Canvas()
+    canvas.fill(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, fg=theme.WHITE, bg=theme.BLACK)
+    selected = _resolve_selected(state, selected_agent_id)
+    divider = theme.ASCII_VERTICAL if ascii_mode else "│"
+    for column_x in (_SHEET_CENTER_X - 2, _SHEET_RIGHT_X - 2):
+        for row in range(2, BOTTOM_BAR_Y):
+            canvas.put(column_x, row, divider, fg=theme.DIM, bg=theme.BLACK)
+
+    if selected is None:
+        canvas.put(2, 0, "F2 · FICHA DEL AGENTE", fg=theme.CYAN, bold=True)
+        canvas.put(2, 2, "— sin agente seleccionado —", fg=theme.DIM)
+        _render_sheet_footer(canvas, ascii_mode)
+        return canvas.to_screen()
+
+    name = names.get(selected.agent_id, str(selected.agent_id))
+    clock = SimulationClock(state.tick_minutes)
+    clock.advance(state.tick)
+    canvas.put(
+        2,
+        0,
+        f"F2 · FICHA DEL AGENTE · {name} · {_agent_glyph(selected, ascii_mode)} · "
+        f"({selected.position.x}, {selected.position.y}) · "
+        f"DÍA {clock.day} · {clock.hour:02d}:{clock.minute:02d}",
+        fg=theme.CYAN,
+        bold=True,
+    )
+    canvas.put(
+        2,
+        1,
+        "TAB cicla agentes · 1-8 selecciona · ESC vuelve al panel · F2 abre esta vista",
+        fg=theme.DIM,
+    )
+    left, center, right = _agent_sheet_columns(
+        state,
+        names,
+        selected,
+        usage=usage,
+        mind_reports=mind_reports,
+        timeline=timeline,
+        messages=messages,
+        betrayals=betrayals,
+        ascii_mode=ascii_mode,
+    )
+    _draw_sheet_column(canvas, 1, 3, _SHEET_COLUMN_WIDTH, left)
+    _draw_sheet_column(canvas, _SHEET_CENTER_X, 3, _SHEET_COLUMN_WIDTH, center)
+    _draw_sheet_column(canvas, _SHEET_RIGHT_X, 3, _SHEET_COLUMN_WIDTH, right)
+    _render_sheet_footer(canvas, ascii_mode)
+    return canvas.to_screen()
+
+
+def _agent_sheet_columns(
+    state: SessionState,
+    names: Mapping[AgentId, str],
+    agent: Agent,
+    *,
+    usage: Mapping[AgentId, AgentUsage] | None,
+    mind_reports: Mapping[AgentId, MindReport] | None,
+    timeline: Sequence[str],
+    messages: Sequence[str],
+    betrayals: Sequence[str],
+    ascii_mode: bool,
+) -> tuple[list[str], list[str], list[str]]:
+    name = names.get(agent.agent_id, str(agent.agent_id))
+    attributes = agent.attributes
+    inventory = agent.inventory
+    left = [
+        "IDENTIDAD",
+        f"  Nombre: {name}",
+        f"  Posición: ({agent.position.x}, {agent.position.y})",
+        f"  Estado: {_agent_state_label(agent)}",
+    ]
+    death = _death_detail(state, agent)
+    if death is not None:
+        left.append(f"  {death}")
+    if agent.is_alive:
+        temperature_ratio = (attributes.body_temperature_c - 34.0) / 8.0 * 100
+        left.extend(
+            [
+                "",
+                "SALUD Y NECESIDADES",
+                f"  Salud   {_bar(attributes.health, 100, ascii_mode)} {attributes.health:>3.0f}",
+                f"  Hambre  {_bar(attributes.hunger, 100, ascii_mode)} {attributes.hunger:>3.0f}",
+                f"  Sed     {_bar(attributes.thirst, 100, ascii_mode)} {attributes.thirst:>3.0f}",
+                f"  Energía {_bar(attributes.energy, 100, ascii_mode)} {attributes.energy:>3.0f}",
+                f"  Temp    {_bar(temperature_ratio, 100, ascii_mode)} "
+                f"{attributes.body_temperature_c:>4.1f} °C",
+                f"  Mojado  {_bar(attributes.wetness, 100, ascii_mode)} {attributes.wetness:>3.0f}",
+                "",
+                "ESTADOS",
+                f"  {' · '.join(_status_tags(agent)) or '—'}",
+                "",
+                "HABILIDADES",
+                f"  FUE {attributes.strength} · DES {attributes.dexterity} · "
+                f"RES {attributes.endurance} · VIS {attributes.vision}",
+            ]
+        )
+    equipment = " · ".join(f"{slot.value}:{spec.name}" for slot, spec in agent.equipment.items)
+    left.extend(
+        [
+            "",
+            "EQUIPO",
+            f"  {equipment or '— sin equipo —'}",
+            "CARGA",
+            f"  {inventory.total_weight_grams / 1000.0:.1f}/"
+            f"{inventory.max_weight_grams / 1000.0:.1f} kg",
+        ]
+    )
+    selected_usage = usage.get(agent.agent_id) if usage is not None else None
+    if selected_usage is not None and selected_usage.entries:
+        entry = selected_usage.entries[-1]
+        left.extend(
+            [
+                "",
+                "USO IA (REPORTADO)",
+                f"  {entry.model} / {entry.reasoning_effort or '-'}: "
+                f"{entry.input_tokens} in / {entry.output_tokens} out",
+                f"  TOTAL {selected_usage.total_tokens} tokens - "
+                f"{_usage_cost_text(selected_usage)}",
+            ]
+        )
+
+    report = None if mind_reports is None else mind_reports.get(agent.agent_id)
+    center = ["MENTE (REPORTADO POR EL AGENTE)"]
+    if report is None:
+        center.append("  — sin reporte —")
+    else:
+        center.append(f"  Intención: {report.intent}")
+        center.extend(f"  {line}" for line in _wrap(report.thought, _SHEET_COLUMN_WIDTH - 2))
+        if report.plan is not None:
+            center.append(f"  Plan: {report.plan}")
+            center.append(f"  Próximo paso reportado: {report.plan}")
+        if report.confidence is not None:
+            center.append(f"  Confianza: {report.confidence}")
+    center.extend(("", "TIMELINE (últimos 20)"))
+    history = list(timeline)
+    if len(history) > _SHEET_TIMELINE_LIMIT:
+        center.append(f"  +{len(history) - _SHEET_TIMELINE_LIMIT} anteriores")
+        history = history[-_SHEET_TIMELINE_LIMIT:]
+    if history:
+        center.extend(f"  {line}" for line in history)
+    else:
+        center.append("  — sin actividad —")
+
+    right = ["INVENTARIO"]
+    if inventory.stacks:
+        right.extend(
+            f"  {stack.definition.item_id} x{stack.quantity}" for stack in inventory.stacks
+        )
+    else:
+        right.append("  — vacío —")
+    right.extend(("", "EQUIPO"))
+    if agent.equipment.items:
+        right.extend(f"  {slot.value}: {spec.name}" for slot, spec in agent.equipment.items)
+    else:
+        right.append("  — sin equipo —")
+    right.extend(("", "RELACIONES"))
+    right.append(f"  Alianzas: {_alliances_line(state, names)}")
+    right.append(f"  Trueques: {_trades_line(state, names)}")
+    right.append(f"  Traiciones: {_last_betrayal(betrayals)}")
+    right.extend(("", "MENSAJES"))
+    if messages:
+        right.extend(f"  {message}" for message in list(messages)[-8:])
+    else:
+        right.append("  — sin mensajes —")
+    if death is not None:
+        corpse = next(
+            (candidate for candidate in state.corpses if candidate.agent_id == agent.agent_id),
+            None,
+        )
+        right.extend(("", "CADÁVER"))
+        right.append(f"  {death}")
+        if corpse is not None:
+            loot = [
+                f"{stack.definition.item_id} x{stack.quantity}" for stack in corpse.inventory.stacks
+            ]
+            right.append(f"  Botín: {', '.join(loot) or '— vacío —'}")
+    return left, center, right
+
+
+def _agent_state_label(agent: Agent) -> str:
+    if agent.status is AgentStatus.DEAD:
+        return "MUERTO"
+    if agent.status is AgentStatus.ABSENT:
+        return "AUSENTE (timeout)"
+    if agent.status is AgentStatus.SLEEPING:
+        return "DURMIENDO"
+    return "ACTIVO"
+
+
+def _draw_sheet_column(
+    canvas: _Canvas,
+    x: int,
+    y: int,
+    width: int,
+    lines: Sequence[str],
+) -> None:
+    for offset, line in enumerate(lines[:_SHEET_HEIGHT]):
+        canvas.put(x, y + offset, _clip(line, width))
+
+
+def _render_sheet_footer(canvas: _Canvas, ascii_mode: bool) -> None:
+    separator = theme.ASCII_VERTICAL if ascii_mode else "│"
+    footer = (
+        f"[TAB] Siguiente agente {separator} [1-8] Seleccionar {separator} "
+        f"[ESC] Volver al panel {separator} [F2] Cerrar ficha"
+    )
+    text = (footer + " " * SCREEN_WIDTH)[:SCREEN_WIDTH]
+    canvas.fill(0, BOTTOM_BAR_Y, SCREEN_WIDTH, 1, fg=theme.BAR_FG, bg=theme.BAR_BG)
+    canvas.put(0, BOTTOM_BAR_Y, text, fg=theme.BAR_FG, bg=theme.BAR_BG, bold=True)
 
 
 def render_help_screen(*, ascii_mode: bool = False) -> BaseScreen:
