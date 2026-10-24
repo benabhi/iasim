@@ -19,6 +19,7 @@ from iasim.app.session import SCHEMA_VERSION, GameSession
 from iasim.config import is_loopback_host
 from iasim.domain.identifiers import AgentId
 from iasim.domain.items import EquipSlot
+from iasim.mcp.disconnect import TerminateSessionMiddleware
 from iasim.mcp.idempotency import MAX_REQUEST_ID_LENGTH, RequestCache, RequestSignature
 from iasim.mcp.limits import MAX_TEXT_FIELD_LENGTH, LimitKind, RateLimiter
 from iasim.mcp.protocol import PROTOCOL_VERSION
@@ -772,7 +773,9 @@ def create_app(
 ) -> tuple[MCPServer[Any], Starlette]:
     """Create the MCP server and its streamable HTTP application."""
     server = create_server(session, resource_url=resource_url, issuer_url=issuer_url)
-    return server, server.streamable_http_app()
+    app = server.streamable_http_app()
+    app.add_middleware(TerminateSessionMiddleware, session=session)
+    return server, app
 
 
 def run_server(

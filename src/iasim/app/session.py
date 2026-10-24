@@ -9,7 +9,7 @@ import os
 import secrets
 import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path
@@ -100,6 +100,7 @@ from iasim.world.tcod_fov import compute_fov, has_line_of_sight
 SCHEMA_VERSION = "1.0"
 MAX_NAME_LENGTH = 40
 DEFAULT_TURN_TIMEOUT_MS = 60_000
+DEFAULT_TIMEOUT_DISCONNECTS = 3
 MAX_AGENTS = 8
 
 
@@ -143,6 +144,7 @@ class GameSession:
         *,
         tick_minutes: int = 5,
         turn_timeout_ms: int = DEFAULT_TURN_TIMEOUT_MS,
+        timeout_disconnects: int = DEFAULT_TIMEOUT_DISCONNECTS,
         max_agents: int | None = None,
         layout: WorldLayout | None = None,
         profiles: Sequence[AgentProfile] | None = None,
@@ -152,11 +154,14 @@ class GameSession:
         weather_max_ticks: int = DEFAULT_WEATHER_MAX_TICKS,
         usage_pricing: Mapping[str, ModelPricing] | None = None,
         mind_log_path: Path | None = None,
+        wall_clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if seed < 0:
             raise ValueError(f"seed must be non-negative, got {seed}")
         if turn_timeout_ms < 1:
             raise ValueError(f"turn_timeout_ms must be positive, got {turn_timeout_ms}")
+        if timeout_disconnects < 1:
+            raise ValueError(f"timeout_disconnects must be positive, got {timeout_disconnects}")
         if weather_min_ticks < 1:
             raise ValueError(f"weather_min_ticks must be positive, got {weather_min_ticks}")
         if weather_max_ticks < weather_min_ticks:
@@ -195,6 +200,10 @@ class GameSession:
             tuple(profiles) if profiles is not None else tuple(AgentProfile() for _ in self._spawns)
         )
         self._turn_timeout_ms = turn_timeout_ms
+        self._timeout_disconnects = timeout_disconnects
+        self._wall_clock = wall_clock
+        self._turn_deadline: float | None = None
+        self._timeouts: dict[AgentId, int] = {}
         self._max_agents = configured_max
         self._token_path = token_path
         self._catalog = catalog if catalog is not None else load_catalog()
@@ -381,6 +390,7 @@ class GameSession:
             self._said_tick.pop(agent_id, None)
             self._mind_reports.pop(agent_id, None)
             self._mind_tick.pop(agent_id, None)
+            self._timeouts.pop(agent_id, None)
             self._joined_slots.add(slot)
             self._token_agents[token] = agent_id
             self._update_phase_locked()
@@ -432,6 +442,7 @@ class GameSession:
             self._said_tick.pop(target, None)
             self._mind_reports.pop(target, None)
             self._mind_tick.pop(target, None)
+            self._timeouts.pop(target, None)
             if token is not None:
                 self._token_agents.pop(token, None)
                 slot = self._token_slots.get(token)
@@ -453,11 +464,12 @@ class GameSession:
     def observe(self, agent_id: str) -> dict[str, Any]:
         """Return the current perception-limited observation for an agent."""
         with self._lock:
+            self._expire_turn_if_due_locked()
             target = AgentId(agent_id)
             agent = self._find_agent(agent_id)
             if target not in self._names or agent is None:
                 return self._error("NOT_YOUR_TURN", "agent is not joined")
-            return self._observation(agent)
+            return self._observation(self._note_response_locked(agent))
 
     def recipes(self) -> dict[str, Any]:
         """Return every known crafting recipe with its requirements."""
@@ -489,10 +501,12 @@ class GameSession:
     def inventory_for(self, agent_id: str) -> dict[str, Any]:
         """Return the inventory, equipment, and capacity of a joined agent."""
         with self._lock:
+            self._expire_turn_if_due_locked()
             target = AgentId(agent_id)
             agent = self._find_agent(agent_id)
             if target not in self._names or agent is None:
                 return self._error("NOT_YOUR_TURN", "agent is not joined")
+            agent = self._note_response_locked(agent)
             return {
                 "ok": True,
                 "schema_version": SCHEMA_VERSION,
@@ -510,10 +524,12 @@ class GameSession:
         agent could predict initiative, hit chances, and weather.
         """
         with self._lock:
+            self._expire_turn_if_due_locked()
             target = AgentId(agent_id)
             agent = self._find_agent(agent_id)
             if target not in self._names or agent is None:
                 return self._error("NOT_YOUR_TURN", "agent is not joined")
+            agent = self._note_response_locked(agent)
             clock = self._engine.clock
             return {
                 "ok": True,
@@ -547,10 +563,12 @@ class GameSession:
     ) -> dict[str, Any]:
         """Return details of one agent, corpse, or tile within perception."""
         with self._lock:
+            self._expire_turn_if_due_locked()
             target = AgentId(agent_id)
             agent = self._find_agent(agent_id)
             if target not in self._names or agent is None:
                 return self._error("NOT_YOUR_TURN", "agent is not joined")
+            agent = self._note_response_locked(agent)
             has_position = x is not None or y is not None
             if target_id is not None and has_position:
                 return self._error(
@@ -654,10 +672,12 @@ class GameSession:
     ) -> dict[str, Any]:
         """Accumulate an agent-reported LLM usage record for the operator."""
         with self._lock:
+            self._expire_turn_if_due_locked()
             target = AgentId(agent_id)
             agent = self._find_agent(agent_id)
             if target not in self._names or agent is None:
                 return self._error("NOT_YOUR_TURN", "agent is not joined")
+            self._note_response_locked(agent)
             if self._phase is SessionPhase.FINISHED:
                 return self._error("SESSION_FINISHED", "the session has ended")
             if (
@@ -779,6 +799,7 @@ class GameSession:
     ) -> dict[str, Any]:
         """Queue one sanitized local chat message for next-tick delivery."""
         with self._lock:
+            self._expire_turn_if_due_locked()
             target = AgentId(agent_id)
             agent = self._find_agent(agent_id)
             if target not in self._names or agent is None:
@@ -857,6 +878,7 @@ class GameSession:
     ) -> dict[str, Any]:
         """Record one sanitized mind report for the current tick."""
         with self._lock:
+            self._expire_turn_if_due_locked()
             target = AgentId(agent_id)
             agent = self._find_agent(agent_id)
             if target not in self._names or agent is None:
@@ -1273,9 +1295,11 @@ class GameSession:
         """Wait for a tick newer than ``since_tick`` or return NO_NEW_TICK."""
         target = AgentId(agent_id)
         with self._condition:
+            self._expire_turn_if_due_locked()
             agent = self._find_agent(agent_id)
             if target not in self._names or agent is None:
                 return self._error("NOT_YOUR_TURN", "agent is not joined")
+            agent = self._note_response_locked(agent)
             if self._is_finished_locked():
                 return self._error("SESSION_FINISHED", "the session has ended")
             if since_tick > self._state.tick:
@@ -1283,12 +1307,21 @@ class GameSession:
             if since_tick < self._state.tick:
                 return self._observation(agent)
 
-            deadline = time.monotonic() + max(0, timeout_ms) / 1000.0
+            deadline = self._wall_clock() + max(0, timeout_ms) / 1000.0
             while since_tick >= self._state.tick and not self._is_finished_locked():
-                remaining = deadline - time.monotonic()
+                self._expire_turn_if_due_locked()
+                if since_tick < self._state.tick:
+                    break
+                remaining = deadline - self._wall_clock()
                 if remaining <= 0:
                     break
-                self._condition.wait(timeout=remaining)
+                wait = remaining
+                if self._turn_deadline is not None:
+                    wait = min(
+                        wait,
+                        max(0.0, self._turn_deadline - self._wall_clock()),
+                    )
+                self._condition.wait(timeout=max(0.001, wait))
 
             agent = self._find_agent(agent_id)
             if agent is None:
@@ -1334,6 +1367,7 @@ class GameSession:
                 new_seed,
                 tick_minutes=self._state.tick_minutes,
                 turn_timeout_ms=self._turn_timeout_ms,
+                timeout_disconnects=self._timeout_disconnects,
                 max_agents=self._max_agents,
                 layout=layout,
                 profiles=self._profiles,
@@ -1343,6 +1377,7 @@ class GameSession:
                 weather_max_ticks=self._weather_max_ticks,
                 usage_pricing=self._usage_pricing,
                 mind_log_path=self._mind_log_path,
+                wall_clock=self._wall_clock,
             )
 
     def health(self) -> dict[str, Any]:
@@ -1359,6 +1394,7 @@ class GameSession:
 
     def _submit(self, agent_id: str, action: Action) -> dict[str, Any]:
         with self._condition:
+            self._expire_turn_if_due_locked()
             target = AgentId(agent_id)
             agent = self._find_agent(agent_id)
             if target not in self._names or agent is None:
@@ -1397,6 +1433,9 @@ class GameSession:
             except ActionRejectedError as exc:
                 return self._error("INTERNAL_ERROR", str(exc), tick=action.tick)
 
+            self._timeouts.pop(target, None)
+            if self._turn_deadline is None:
+                self._turn_deadline = self._wall_clock() + self._turn_timeout_ms / 1000.0
             self._resolve_if_complete()
             return {
                 "ok": True,
@@ -1418,11 +1457,68 @@ class GameSession:
         if len(self._engine.pending_agents) < len(active_agents):
             return
 
+        self._turn_deadline = None
         result = self._engine.resolve()
         self._state = self._engine.state
         self._record_result(result)
         self._update_phase_locked()
         self._condition.notify_all()
+
+    def _expire_turn_if_due_locked(self) -> None:
+        """Resolve the turn once its action deadline has passed."""
+        if self._turn_deadline is None or self._phase is SessionPhase.FINISHED:
+            return
+        if self._wall_clock() < self._turn_deadline:
+            return
+        self._resolve_deadline_locked()
+
+    def _resolve_deadline_locked(self) -> None:
+        """Skip missing actions, count timeouts, and resolve the turn."""
+        pending = self._engine.pending_agents
+        self._turn_deadline = None
+        if not pending:
+            return
+
+        absent: set[AgentId] = set()
+        for agent in self._state.agents:
+            if agent.status is not AgentStatus.ACTIVE or agent.agent_id in pending:
+                continue
+            timeouts = self._timeouts.get(agent.agent_id, 0) + 1
+            self._timeouts[agent.agent_id] = timeouts
+            if timeouts >= self._timeout_disconnects:
+                absent.add(agent.agent_id)
+        if absent:
+            self._state = replace(
+                self._state,
+                agents=tuple(
+                    replace(agent, status=AgentStatus.ABSENT) if agent.agent_id in absent else agent
+                    for agent in self._state.agents
+                ),
+            )
+            self._engine.replace_state(self._state)
+
+        result = self._engine.resolve()
+        self._state = self._engine.state
+        self._record_result(result)
+        self._update_phase_locked()
+        self._condition.notify_all()
+
+    def _note_response_locked(self, agent: Agent) -> Agent:
+        """Mark a connected absent agent as active again after it responds."""
+        if agent.status is not AgentStatus.ABSENT:
+            return agent
+        revived = replace(agent, status=AgentStatus.ACTIVE)
+        self._state = replace(
+            self._state,
+            agents=tuple(
+                revived if current.agent_id == agent.agent_id else current
+                for current in self._state.agents
+            ),
+        )
+        self._engine.replace_state(self._state)
+        self._timeouts.pop(agent.agent_id, None)
+        self._update_phase_locked()
+        return revived
 
     def _is_finished_locked(self) -> bool:
         return self._phase is SessionPhase.FINISHED
@@ -1654,6 +1750,7 @@ class GameSession:
                 "body_temp_c": attributes.body_temperature_c,
                 "wetness": attributes.wetness,
                 "status": [tag.value for tag in status_tags(agent)],
+                "state": agent.status.value,
                 "sleeping": agent.status is AgentStatus.SLEEPING,
                 "strength": max(0, attributes.strength - strength_penalty(attributes)),
                 "dexterity": max(

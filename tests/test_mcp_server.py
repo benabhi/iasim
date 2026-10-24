@@ -350,6 +350,7 @@ class McpServerTests(unittest.TestCase):
                             observation["last_action_result"]["outcome"],
                             "missing_ingredients",
                         )
+                        self.assertEqual(observation["agent"]["pos"], [3, 2])
 
                 asyncio.run(flow())
             finally:
@@ -358,7 +359,9 @@ class McpServerTests(unittest.TestCase):
                 thread.join(timeout=10)
 
             self.assertFalse(thread.is_alive())
-            self.assertEqual(session.state.agents[0].position, Position(3, 2))
+            # Closing the transport removes the agent and frees its slot.
+            self.assertEqual(session.state.agents, ())
+            self.assertIsNone(session.agent_for_token(token))
 
     def test_http_message_limit_returns_structured_error(self) -> None:
         session = GameSession(42, layout=_layout())
@@ -586,6 +589,127 @@ class McpServerTests(unittest.TestCase):
                     self.assertTrue(shared_a["ok"])
                     self.assertTrue(shared_b["ok"])
                     self.assertEqual(session.tick, 3)
+
+            asyncio.run(flow())
+        finally:
+            server.should_exit = True
+            server.force_exit = True
+            thread.join(timeout=10)
+
+        self.assertFalse(thread.is_alive())
+
+    def test_http_disconnect_removes_the_agent_and_frees_the_slot(self) -> None:
+        session = GameSession(42, layout=_layout())
+        token = session.tokens[0]
+        _, app = create_app(session)
+        server, thread, port = _start_server(app)
+        url = f"http://127.0.0.1:{port}/mcp"
+        try:
+
+            async def move_then_leave() -> dict[str, Any]:
+                headers = {"Authorization": f"Bearer {token}"}
+                async with (
+                    create_mcp_http_client(headers=headers) as http_client,
+                    streamable_http_client(url, http_client=http_client) as (
+                        read_stream,
+                        write_stream,
+                    ),
+                    ClientSession(read_stream, write_stream) as client,
+                ):
+                    await client.initialize()
+                    joined = _data(await client.call_tool("iasim_join", {"name": "Nia"}))
+                    moved = _data(
+                        await client.call_tool(
+                            "iasim_move",
+                            {"tick": 0, "dx": 1, "dy": 0},
+                        )
+                    )
+                    self.assertTrue(moved["ok"])
+                    return joined
+
+            async def join_only() -> dict[str, Any]:
+                headers = {"Authorization": f"Bearer {token}"}
+                async with (
+                    create_mcp_http_client(headers=headers) as http_client,
+                    streamable_http_client(url, http_client=http_client) as (
+                        read_stream,
+                        write_stream,
+                    ),
+                    ClientSession(read_stream, write_stream) as client,
+                ):
+                    await client.initialize()
+                    joined = _data(await client.call_tool("iasim_join", {"name": "Nia"}))
+                    self.assertEqual(len(session.state.agents), 1)
+                    return joined
+
+            joined = asyncio.run(move_then_leave())
+            self.assertTrue(joined["ok"])
+            self.assertEqual(joined["agent_id"], "ag_01")
+            # The transport DELETE removed the agent and freed the slot.
+            self.assertEqual(session.state.agents, ())
+            self.assertIsNone(session.agent_for_token(token))
+
+            rejoined = asyncio.run(join_only())
+            self.assertTrue(rejoined["ok"])
+            self.assertEqual(rejoined["agent_id"], "ag_01")
+            self.assertEqual(rejoined["spawn"], [2, 2])
+            self.assertEqual(session.state.agents, ())
+        finally:
+            server.should_exit = True
+            server.force_exit = True
+            thread.join(timeout=10)
+
+        self.assertFalse(thread.is_alive())
+
+    def test_http_disconnect_cancels_a_pending_action(self) -> None:
+        session = GameSession(42, layout=_two_agent_layout())
+        token_a = session.tokens[0]
+        token_b = session.tokens[1]
+        _, app = create_app(session)
+        server, thread, port = _start_server(app)
+        url = f"http://127.0.0.1:{port}/mcp"
+        try:
+
+            async def flow() -> None:
+                headers_a = {"Authorization": f"Bearer {token_a}"}
+                headers_b = {"Authorization": f"Bearer {token_b}"}
+                async with (
+                    create_mcp_http_client(headers=headers_a) as http_a,
+                    streamable_http_client(url, http_client=http_a) as (read_a, write_a),
+                    ClientSession(read_a, write_a) as client_a,
+                ):
+                    await client_a.initialize()
+                    self.assertTrue(
+                        _data(await client_a.call_tool("iasim_join", {"name": "Nia"}))["ok"]
+                    )
+                    async with (
+                        create_mcp_http_client(headers=headers_b) as http_b,
+                        streamable_http_client(url, http_client=http_b) as (read_b, write_b),
+                        ClientSession(read_b, write_b) as client_b,
+                    ):
+                        await client_b.initialize()
+                        self.assertTrue(
+                            _data(await client_b.call_tool("iasim_join", {"name": "Kai"}))["ok"]
+                        )
+                        self.assertTrue(
+                            _data(
+                                await client_a.call_tool(
+                                    "iasim_wait",
+                                    {"tick": 0},
+                                )
+                            )["ok"]
+                        )
+                        self.assertEqual(session.tick, 0)
+
+                    # The second client closed; its leave resolved the pending turn.
+                    self.assertEqual(session.tick, 1)
+                    self.assertEqual(len(session.state.agents), 1)
+                    observation = _data(await client_a.call_tool("iasim_observe", {}))
+                    self.assertEqual(observation["tick"], 1)
+                    self.assertEqual(
+                        observation["last_action_result"]["outcome"],
+                        "waited",
+                    )
 
             asyncio.run(flow())
         finally:
