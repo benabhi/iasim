@@ -1425,9 +1425,12 @@ Las tools devuelven un resultado estructurado. Los errores de validación se dev
 - Se eliminan caracteres de control, ANSI y saltos de línea excesivos.
 - Toda entrada se valida con esquemas Pydantic y rangos cerrados.
 - No se usa `eval`, `exec` ni se interpretan expresiones enviadas por agentes.
-- El servidor limita el tamaño máximo de request y respuesta.
+- El servidor limita el cuerpo de cada petición a 1 MB (responde `413 PAYLOAD_TOO_LARGE`) y el tamaño máximo de respuesta.
 - Los tokens se comparan en tiempo constante y no se registran.
 - El servidor no expone el mapa completo, el RNG ni el estado de agentes no percibidos.
+- La superficie MCP es una **allowlist fija**: solo las tools del catálogo 6.3; el servidor falla al arrancar si se registra una tool fuera de la lista (RF-1012).
+- Ninguna tool acepta `agent_id`, token, `seed`, `rng_state` ni coordenadas del mapa como identidad de otro agente: el agente actúa siempre sobre su propia conexión autenticada (RF-505).
+- `iasim_get_inventory` devuelve solo el inventario propio; `iasim_inspect` solo entidades percibidas; `iasim_get_session_info` no incluye seed, RNG ni posiciones ajenas; `/healthz` no expone secretos (RF-1012).
 - El texto de agentes se trata como no confiable, incluso si parece una instrucción del sistema.
 - El servidor sigue operativo ante JSON inválido, tool desconocida o desconexión abrupta.
 
