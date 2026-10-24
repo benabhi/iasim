@@ -1651,6 +1651,7 @@ Las métricas se calculan por agente y por sesión. Se guardan en `summary.json`
 
 - Las métricas de necesidades se calculan solo sobre ticks con el agente vivo.
 - Las tasas se acompañan del numerador y denominador para evitar ambigüedad.
+- `metrics.csv` usa columnas estables: `scope`, `agent_id`, `name` y las métricas de la tabla en su orden, seguidas de los componentes `critical_need_ticks`, `alive_ticks`, `explored_cells`, `transitable_cells`, `decision_latency_samples` y `agent_count`. Los valores ausentes se escriben como celdas vacías y las métricas compuestas (`resources_gathered`, `items_crafted`, `structures_built`) como JSON compacto.
 - No se impone un “puntaje único” en el MVP: se comparan vectores de métricas. Un score compuesto configurable queda para fase 2.
 - El reporte final incluye una tabla por agente y una fila de agregados de sesión.
 - La ausencia de reportes de mente se mide; no se penaliza automáticamente.

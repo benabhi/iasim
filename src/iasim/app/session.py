@@ -96,6 +96,7 @@ from iasim.domain.weather import (
 )
 from iasim.domain.world import Structure
 from iasim.errors import PersistenceError
+from iasim.persistence.export import write_metrics_csv, write_summary
 from iasim.persistence.logs import SessionLogs
 from iasim.persistence.metrics import MetricsRecorder
 from iasim.persistence.replay import write_replay
@@ -1561,6 +1562,7 @@ class GameSession:
                 )
                 self._write_session_metadata_locked()
                 self._write_replay_locked()
+                self._export_metrics_locked()
                 self._condition.notify_all()
             summary = self._summary_locked()
             if summary is None:
@@ -1572,6 +1574,14 @@ class GameSession:
         """Return the final summary, or None while the session is active."""
         with self._lock:
             return self._summary_locked()
+
+    def _export_metrics_locked(self) -> None:
+        """Write summary.json and metrics.csv when a run directory exists."""
+        if self._log_dir is None:
+            return
+        snapshot = self.metrics_snapshot()
+        write_summary(Path(self._log_dir), snapshot)
+        write_metrics_csv(Path(self._log_dir), snapshot)
 
     def restart(self, seed: int | None = None) -> GameSession:
         """Create a clean session with the same configuration and a new seed."""
