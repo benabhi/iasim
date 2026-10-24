@@ -333,6 +333,12 @@ class GameSession:
         with self._lock:
             return self._final_state_hash
 
+    @property
+    def state_hash(self) -> str:
+        """Return the canonical hash of the current simulation state."""
+        with self._lock:
+            return canonical_state_hash(self._state)
+
     def agent_id_for_token(self, token: str) -> AgentId | None:
         """Return the slot agent id for a valid token, joined or not."""
         slot = self._token_slots.get(token)

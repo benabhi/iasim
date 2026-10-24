@@ -142,6 +142,7 @@ def _agent_payload(agent: Agent) -> dict[str, Any]:
 
 
 def _memory_payload(agent: Agent) -> dict[str, Any]:
+    remembered_agents = sorted(agent.memory.agents, key=lambda entry: str(entry.agent_id))
     return {
         "tiles": [
             {
@@ -149,11 +150,14 @@ def _memory_payload(agent: Agent) -> dict[str, Any]:
                 "y": entry.position.y,
                 "tile": entry.tile.value,
                 "last_seen_tick": entry.last_seen_tick,
-                "resources": list(entry.resources),
+                "resources": sorted(entry.resources),
                 "structure": entry.structure.value if entry.structure is not None else None,
                 "stale": entry.stale,
             }
-            for entry in agent.memory.tiles
+            for entry in sorted(
+                agent.memory.tiles,
+                key=lambda entry: (entry.position.y, entry.position.x),
+            )
         ],
         "agents": [
             {
@@ -163,7 +167,7 @@ def _memory_payload(agent: Agent) -> dict[str, Any]:
                 "last_seen_tick": entry.last_seen_tick,
                 "stale": entry.stale,
             }
-            for entry in agent.memory.agents
+            for entry in remembered_agents
         ],
     }
 
