@@ -13,6 +13,7 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
 from iasim.domain.identifiers import AgentId
+from iasim.ui.events import next_category
 from iasim.ui.panel import PANEL_PAGE, PANEL_STEP, PanelState, RightPanelTab
 
 SPEEDS: tuple[int, ...] = (1, 2, 4, 8)
@@ -28,6 +29,10 @@ KEY_GUIDE: tuple[tuple[str, str], ...] = (
     ("F1", "Abrir / cerrar ayuda"),
     ("F2", "Abrir / cerrar ficha completa del agente"),
     ("F3", "Abrir / cerrar resumen del mundo"),
+    ("F4", "Abrir / cerrar registro de eventos"),
+    ("/", "Buscar en el registro de eventos"),
+    ("T / A", "Filtrar eventos por tipo o agente"),
+    ("PgUp/PgDn", "Paginar el registro de eventos"),
     ("A", "Alternar ASCII"),
     ("V", "Alternar foco FOV / mapa completo"),
     ("W", "Alternar capa de clima"),
@@ -61,6 +66,7 @@ class UiView(StrEnum):
     NONE = "none"
     AGENT_SHEET = "agent_sheet"
     WORLD_SUMMARY = "world_summary"
+    EVENT_LOG = "event_log"
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +85,11 @@ class UiState:
     restart_requested: bool = False
     panel: PanelState = field(default_factory=PanelState)
     view: UiView = UiView.NONE
+    event_query: str = ""
+    event_category: str | None = None
+    event_agent_only: bool = False
+    event_page: int = 0
+    event_search_open: bool = False
 
 
 def handle_key(
@@ -103,6 +114,23 @@ def handle_key(
             return replace(state, help_open=False)
         return state
 
+    if state.event_search_open:
+        if normalized in {"esc", "enter"}:
+            return replace(state, event_search_open=False)
+        if normalized in {"backspace", "bksp"}:
+            return replace(
+                state,
+                event_query=state.event_query[:-1],
+                event_page=0,
+            )
+        if len(normalized) == 1:
+            return replace(
+                state,
+                event_query=(state.event_query + normalized)[:40],
+                event_page=0,
+            )
+        return state
+
     if normalized == "esc":
         if state.view is not UiView.NONE:
             return replace(state, view=UiView.NONE)
@@ -118,8 +146,29 @@ def handle_key(
         view = UiView.NONE if state.view is UiView.WORLD_SUMMARY else UiView.WORLD_SUMMARY
         return replace(state, view=view)
 
+    if normalized == "f4":
+        view = UiView.NONE if state.view is UiView.EVENT_LOG else UiView.EVENT_LOG
+        return replace(state, view=view, event_search_open=False)
+
     if normalized == "enter" and state.view is UiView.WORLD_SUMMARY:
         return replace(state, view=UiView.AGENT_SHEET)
+
+    if state.view is UiView.EVENT_LOG and normalized == "/":
+        return replace(state, event_search_open=True)
+
+    if state.view is UiView.EVENT_LOG and normalized == "t":
+        return replace(
+            state,
+            event_category=next_category(state.event_category),
+            event_page=0,
+        )
+
+    if state.view is UiView.EVENT_LOG and normalized == "a":
+        return replace(
+            state,
+            event_agent_only=not state.event_agent_only,
+            event_page=0,
+        )
 
     if normalized in {"[", "leftbracket", "lbrace"}:
         return replace(state, panel=state.panel.cycle(-1))
@@ -128,13 +177,22 @@ def handle_key(
         return replace(state, panel=state.panel.cycle(1))
 
     if normalized in {"up", "down"}:
+        if state.view is UiView.EVENT_LOG:
+            return replace(
+                state,
+                event_page=_move_page(state.event_page, -1 if normalized == "up" else 1),
+            )
         delta = -PANEL_STEP if normalized == "up" else PANEL_STEP
         return replace(state, panel=state.panel.scrolled(delta))
 
     if normalized in {"pageup", "pgup", "prior"}:
+        if state.view is UiView.EVENT_LOG:
+            return replace(state, event_page=_move_page(state.event_page, -1))
         return replace(state, panel=state.panel.scrolled(-PANEL_PAGE))
 
     if normalized in {"pagedown", "pgdn", "next"}:
+        if state.view is UiView.EVENT_LOG:
+            return replace(state, event_page=_move_page(state.event_page, 1))
         return replace(state, panel=state.panel.scrolled(PANEL_PAGE))
 
     if normalized == "home":
@@ -180,6 +238,10 @@ def handle_key(
         return replace(state, pending_confirmation=UiCommand.RESTART)
 
     return state
+
+
+def _move_page(page: int, delta: int) -> int:
+    return max(0, page + delta)
 
 
 def _normalize_key(key: str) -> str:
