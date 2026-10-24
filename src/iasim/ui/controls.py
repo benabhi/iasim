@@ -11,11 +11,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from typing import Any
 
 from iasim.domain.geometry import Position
 from iasim.domain.identifiers import AgentId
 from iasim.ui.events import next_category
 from iasim.ui.panel import PANEL_PAGE, PANEL_STEP, PanelState, RightPanelTab
+from iasim.ui.settings import DisplaySettings
 
 SPEEDS: tuple[int, ...] = (1, 2, 4, 8)
 
@@ -34,6 +36,8 @@ KEY_GUIDE: tuple[tuple[str, str], ...] = (
     ("F5", "Reproducir la sesión actual"),
     ("F6", "Abrir / cerrar mapa ampliado"),
     ("F7", "Abrir / cerrar métricas de la sesión"),
+    ("F8", "Abrir / cerrar ajustes de visualización"),
+    ("F11", "Alternar pantalla completa"),
     ("/", "Buscar en el registro de eventos"),
     ("T / A", "Filtrar eventos por tipo o agente"),
     ("PgUp/PgDn", "Paginar el registro de eventos"),
@@ -76,6 +80,7 @@ class UiView(StrEnum):
     MAP_VIEW = "map_view"
     REPLAY = "replay"
     METRICS = "metrics"
+    SETTINGS = "settings"
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +109,7 @@ class UiState:
     replay_tick: int = 0
     replay_total: int = 0
     replay_paused: bool = True
+    display: DisplaySettings = field(default_factory=DisplaySettings)
 
 
 def handle_key(
@@ -167,35 +173,60 @@ def handle_key(
 
     if normalized == "f2":
         view = UiView.NONE if state.view is UiView.AGENT_SHEET else UiView.AGENT_SHEET
-        return replace(state, view=view)
+        return _overlay_state(state, view)
 
     if normalized == "f3":
         view = UiView.NONE if state.view is UiView.WORLD_SUMMARY else UiView.WORLD_SUMMARY
-        return replace(state, view=view)
+        return _overlay_state(state, view)
 
     if normalized == "f4":
         view = UiView.NONE if state.view is UiView.EVENT_LOG else UiView.EVENT_LOG
-        return replace(state, view=view, event_search_open=False)
+        return _overlay_state(state, view, event_search_open=False)
 
     if normalized == "f6":
         view = UiView.NONE if state.view is UiView.MAP_VIEW else UiView.MAP_VIEW
-        return replace(state, view=view)
+        return _overlay_state(state, view)
 
     if normalized == "f7":
         view = UiView.NONE if state.view is UiView.METRICS else UiView.METRICS
-        return replace(state, view=view)
+        return _overlay_state(state, view)
+
+    if normalized == "f8":
+        view = UiView.NONE if state.view is UiView.SETTINGS else UiView.SETTINGS
+        return _overlay_state(state, view)
+
+    if normalized == "f11":
+        return replace(state, display=state.display.toggled_fullscreen())
 
     if normalized == "f5":
         if state.view is UiView.REPLAY:
             return replace(state, view=UiView.NONE)
         total = replay_total if replay_total is not None else state.replay_total
-        return replace(
+        return _overlay_state(
             state,
-            view=UiView.REPLAY,
+            UiView.REPLAY,
             replay_tick=0,
             replay_total=max(1, total),
             replay_paused=True,
         )
+
+    if state.view is UiView.SETTINGS:
+        settings = state.display
+        if normalized == "p":
+            settings = settings.toggled_palette()
+        elif normalized == "s":
+            settings = settings.cycled_font_scale()
+        elif normalized == "o":
+            settings = settings.toggled_pause_on_overlay()
+        elif normalized == "t":
+            settings = settings.toggled_ticker()
+        elif normalized == "l":
+            settings = settings.toggled_weather_layer()
+        elif normalized == "c":
+            settings = settings.toggled_confirm_exit()
+        else:
+            return state
+        return replace(state, display=settings)
 
     if state.view is UiView.REPLAY:
         total = max(1, replay_total if replay_total is not None else state.replay_total)
@@ -303,12 +334,21 @@ def handle_key(
         return replace(state, weather_overlay=not state.weather_overlay)
 
     if normalized == "q":
-        return replace(state, pending_confirmation=UiCommand.QUIT)
+        if state.display.confirm_exit:
+            return replace(state, pending_confirmation=UiCommand.QUIT)
+        return replace(state, quit_requested=True)
 
     if normalized == "r":
-        return replace(state, pending_confirmation=UiCommand.RESTART)
+        if state.display.confirm_exit:
+            return replace(state, pending_confirmation=UiCommand.RESTART)
+        return replace(state, restart_requested=True)
 
     return state
+
+
+def _overlay_state(state: UiState, view: UiView, **changes: Any) -> UiState:
+    paused = state.paused or (view is not UiView.NONE and state.display.pause_on_overlay)
+    return replace(state, view=view, paused=paused, **changes)
 
 
 def _move_page(page: int, delta: int) -> int:

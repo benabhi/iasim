@@ -21,20 +21,25 @@ from iasim.ui.layout import (
     render_map_screen,
     render_metrics_screen,
     render_replay_screen,
+    render_settings_screen,
     render_world_screen,
 )
 from iasim.ui.panel import PANEL_TABS, TAB_LABELS, PanelState, RightPanelTab
+from iasim.ui.settings import PALETTE_LABELS, DisplaySettings, Palette
 
 __all__ = [
     "CATEGORY_LABELS",
     "CATEGORY_ORDER",
     "KEY_GUIDE",
     "PAGE_SIZE",
+    "PALETTE_LABELS",
     "PANEL_TABS",
     "TAB_LABELS",
     "BaseScreen",
     "Cell",
+    "DisplaySettings",
     "EventRow",
+    "Palette",
     "PanelState",
     "RightPanelTab",
     "UiCommand",
@@ -50,5 +55,6 @@ __all__ = [
     "render_map_screen",
     "render_metrics_screen",
     "render_replay_screen",
+    "render_settings_screen",
     "render_world_screen",
 ]

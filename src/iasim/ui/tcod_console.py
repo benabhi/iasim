@@ -93,6 +93,13 @@ def key_from_event(event: tcod.event.KeyDown) -> str | None:
     return None
 
 
+def request_fullscreen(enabled: bool) -> None:
+    """Ask the terminal backend to switch fullscreen (window-level, F11)."""
+    setter = getattr(tcod, "sys_set_fullscreen", None)
+    if callable(setter):
+        setter(enabled)
+
+
 def handle_tcod_event(
     state: UiState,
     event: tcod.event.KeyDown,
