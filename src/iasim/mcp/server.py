@@ -312,6 +312,36 @@ def create_server(
         return session.loot(agent_id, tick, corpse_id)
 
     @server.tool()
+    def iasim_offer_alliance(tick: int, target_id: str) -> dict[str, Any]:
+        """Offer an alliance to a nearby living agent."""
+        agent_id = _guard(session, limiter, LimitKind.ACTION)
+        if isinstance(agent_id, dict):
+            return agent_id
+        if _text_too_long(target_id):
+            return _message_too_long(session)
+        return session.offer_alliance(agent_id, tick, target_id)
+
+    @server.tool()
+    def iasim_accept_alliance(tick: int, alliance_id: str) -> dict[str, Any]:
+        """Accept a pending alliance offer addressed to the agent."""
+        agent_id = _guard(session, limiter, LimitKind.ACTION)
+        if isinstance(agent_id, dict):
+            return agent_id
+        if _text_too_long(alliance_id):
+            return _message_too_long(session)
+        return session.accept_alliance(agent_id, tick, alliance_id)
+
+    @server.tool()
+    def iasim_break_alliance(tick: int, target_id: str) -> dict[str, Any]:
+        """Break an alliance, or close a pending offer."""
+        agent_id = _guard(session, limiter, LimitKind.ACTION)
+        if isinstance(agent_id, dict):
+            return agent_id
+        if _text_too_long(target_id):
+            return _message_too_long(session)
+        return session.break_alliance(agent_id, tick, target_id)
+
+    @server.tool()
     def iasim_report_mind(
         tick: int,
         intent: str,

@@ -23,6 +23,9 @@ class ActionKind(StrEnum):
     BUILD = "build"
     USE_ITEM = "use_item"
     TRADE = "trade"
+    OFFER_ALLIANCE = "offer_alliance"
+    ACCEPT_ALLIANCE = "accept_alliance"
+    BREAK_ALLIANCE = "break_alliance"
     LOOT = "loot"
     ATTACK = "attack"
     FLEE = "flee"
@@ -38,7 +41,8 @@ class ActionKind(StrEnum):
 
 # SRS section 3.2: movement, gathering, crafting, building, item use, trade, combat.
 # Item interaction actions share the item-use rank so enumeration order cannot change
-# the deterministic resolution order.
+# the deterministic resolution order. Alliance declarations share the trade rank so
+# social state settles before combat resolves in the same tick.
 _ACTION_ORDER: dict[ActionKind, int] = {
     ActionKind.MOVE: 0,
     ActionKind.MOVE_TO: 0,
@@ -53,6 +57,9 @@ _ACTION_ORDER: dict[ActionKind, int] = {
     ActionKind.USE_ITEM: 4,
     ActionKind.LOOT: 4,
     ActionKind.TRADE: 5,
+    ActionKind.OFFER_ALLIANCE: 5,
+    ActionKind.ACCEPT_ALLIANCE: 5,
+    ActionKind.BREAK_ALLIANCE: 5,
     ActionKind.ATTACK: 6,
     ActionKind.FLEE: 6,
     ActionKind.WAIT: 7,

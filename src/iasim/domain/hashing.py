@@ -7,6 +7,7 @@ import json
 from typing import Any
 
 from iasim.domain.agents import Agent
+from iasim.domain.alliances import Alliance
 from iasim.domain.corpse import Corpse
 from iasim.domain.items import GroundItem, ItemStack
 from iasim.domain.resources import ResourceNode
@@ -88,6 +89,10 @@ def canonical_state_payload(state: SessionState) -> dict[str, Any]:
         "corpses": [
             _corpse_payload(corpse)
             for corpse in sorted(state.corpses, key=lambda corpse: corpse.corpse_id)
+        ],
+        "alliances": [
+            _alliance_payload(alliance)
+            for alliance in sorted(state.alliances, key=lambda alliance: alliance.alliance_id)
         ],
     }
 
@@ -218,4 +223,16 @@ def _resource_node_payload(node: ResourceNode) -> dict[str, Any]:
         "remaining": node.remaining,
         "capacity": node.capacity,
         "regrow_at_tick": node.regrow_at_tick,
+    }
+
+
+def _alliance_payload(alliance: Alliance) -> dict[str, Any]:
+    return {
+        "alliance_id": alliance.alliance_id,
+        "members": [str(member) for member in alliance.members],
+        "status": alliance.status.value,
+        "proposed_by": str(alliance.proposed_by),
+        "offered_tick": alliance.offered_tick,
+        "accepted_tick": alliance.accepted_tick,
+        "broken_tick": alliance.broken_tick,
     }
