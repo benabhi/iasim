@@ -151,3 +151,18 @@ TILE_LABELS: dict[TileType, str] = {
     TileType.CORPSE: "cadáver",
     TileType.GROUND_ITEM: "objeto",
 }
+
+# Colors that keep the same meaning under deuteranopia/protanopia simulation:
+# red and green become vermillion and blue, while yellow/cyan stay distinguishable.
+COLORBLIND_REPLACEMENTS: dict[RGB, RGB] = {
+    RED: (213, 94, 0),
+    GREEN: (0, 114, 178),
+    YELLOW: (240, 228, 66),
+    CYAN: (86, 180, 233),
+    AGENT_COLOR: (255, 255, 255),
+    GROUND_ITEM_COLOR: (240, 228, 66),
+    WEATHER_RAIN_COLOR: (0, 158, 115),
+    WEATHER_WIND_COLOR: (204, 121, 167),
+    SELECTED_BG: (24, 48, 74),
+    CURSOR_BG: (110, 92, 40),
+}

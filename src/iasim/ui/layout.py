@@ -37,6 +37,7 @@ from iasim.ui.events import (
 )
 from iasim.ui.inspection import describe_position
 from iasim.ui.panel import PANEL_TABS, TAB_LABELS, PanelState, RightPanelTab
+from iasim.ui.settings import PALETTE_LABELS, DisplaySettings, Palette
 from iasim.world.tcod_fov import compute_fov
 
 SCREEN_WIDTH = 160
@@ -260,17 +261,19 @@ def render_base_screen(
     inspection_pinned: bool = False,
     banner: str | None = None,
     footer: str | None = None,
+    display: DisplaySettings | None = None,
 ) -> BaseScreen:
     """Render the deterministic base screen without mutating the session."""
     canvas = _Canvas()
     canvas.fill(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, fg=theme.WHITE, bg=theme.BLACK)
+    show_weather = weather_overlay and (display is None or display.show_weather_layer)
     _render_map(
         canvas,
         state,
         selected_agent_id,
         ascii_mode,
         focus_mode=focus_mode,
-        weather_overlay=weather_overlay,
+        weather_overlay=show_weather,
         cursor=cursor,
     )
     if cursor is not None:
@@ -288,7 +291,7 @@ def render_base_screen(
         )
     elif banner is not None:
         _render_banner_ticker(canvas, banner, ascii_mode)
-    else:
+    elif display is None or display.show_ticker:
         _render_ticker(canvas, events, ascii_mode)
     _render_panel(
         canvas,
@@ -308,7 +311,136 @@ def render_base_screen(
         betrayals=betrayals,
     )
     _render_bottom_bar(canvas, ascii_mode, override=footer)
-    return canvas.to_screen()
+    screen = canvas.to_screen()
+    palette = display.palette if display is not None else Palette.NORMAL
+    return _apply_palette(screen, palette)
+
+
+def _apply_palette(screen: BaseScreen, palette: Palette) -> BaseScreen:
+    if palette is not Palette.COLORBLIND:
+        return screen
+    replacements = theme.COLORBLIND_REPLACEMENTS
+    cells = tuple(
+        Cell(
+            cell.char,
+            replacements.get(cell.fg, cell.fg),
+            replacements.get(cell.bg, cell.bg),
+            cell.bold,
+        )
+        for cell in screen.cells
+    )
+    return BaseScreen(width=screen.width, height=screen.height, cells=cells)
+
+
+_SETTINGS_FOOTER = (
+    "[P] Paleta│[S] Escala│[O] Pausa│[T] Ticker│[L] Capas│[C] Confirmación│"
+    "[F11] Pantalla completa│[ESC/F8] Volver"
+)
+
+
+def render_settings_screen(
+    display: DisplaySettings,
+    *,
+    ascii_mode: bool = False,
+) -> BaseScreen:
+    """Render the F8 display settings view with an immediate color preview."""
+    settings = display.normalized()
+    canvas = _Canvas()
+    canvas.fill(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, fg=theme.WHITE, bg=theme.BLACK)
+    canvas.put(
+        2,
+        0,
+        "F8 · AJUSTES DE VISUALIZACIÓN",
+        fg=theme.CYAN,
+        bold=True,
+    )
+    canvas.put(
+        2,
+        1,
+        "Solo presentación: los cambios se aplican al instante, duran toda la "
+        "sesión y no modifican la simulación.",
+        fg=theme.DIM,
+    )
+    options = (
+        ("[P]", "Paleta", PALETTE_LABELS[settings.palette]),
+        ("[S]", "Escala de fuente", f"x{settings.font_scale}"),
+        ("[O]", "Pausar al abrir overlay", _si_no(settings.pause_on_overlay)),
+        ("[T]", "Mostrar ticker", _si_no(settings.show_ticker)),
+        ("[L]", "Capa de clima por defecto", _si_no(settings.show_weather_layer)),
+        ("[C]", "Confirmar salida y reinicio", _si_no(settings.confirm_exit)),
+        ("[F11]", "Pantalla completa", _si_no(settings.fullscreen)),
+    )
+    y = 3
+    for key, label, value in options:
+        canvas.put(2, y, key, fg=theme.CYAN, bold=True)
+        canvas.put(9, y, f"{label}:", fg=theme.WHITE)
+        canvas.put(9 + len(label) + 1, y, value, fg=theme.CURSOR_FG, bold=True)
+        y += 1
+    y += 1
+    canvas.put(2, y, "MUESTRA DE COLORES", fg=theme.CYAN, bold=True)
+    y += 1
+    preview = (
+        (
+            theme.tile_glyph(TileType.GRASS, ascii_mode=ascii_mode),
+            "pasto",
+            theme.TILE_COLORS[TileType.GRASS],
+        ),
+        (
+            theme.tile_glyph(TileType.TREE, ascii_mode=ascii_mode),
+            "árbol",
+            theme.TILE_COLORS[TileType.TREE],
+        ),
+        ("@", "agente", theme.AGENT_COLOR),
+        (
+            theme.structure_glyph(StructureKind.FIRE, ascii_mode=ascii_mode),
+            "fuego",
+            theme.STRUCTURE_COLORS[StructureKind.FIRE],
+        ),
+        (
+            theme.ASCII_CORPSE_GLYPH if ascii_mode else theme.CORPSE_GLYPH,
+            "cadáver",
+            theme.CORPSE_COLOR,
+        ),
+        (
+            theme.ASCII_GROUND_ITEM_GLYPH if ascii_mode else theme.GROUND_ITEM_GLYPH,
+            "objeto",
+            theme.GROUND_ITEM_COLOR,
+        ),
+        (
+            theme.ASCII_RAIN_GLYPH if ascii_mode else theme.WEATHER_RAIN_GLYPH,
+            "lluvia",
+            theme.WEATHER_RAIN_COLOR,
+        ),
+    )
+    x = 2
+    for glyph, label, color in preview:
+        canvas.put(x, y, glyph, fg=color, bold=True)
+        canvas.put(x + 2, y, label, fg=theme.DIM)
+        x += len(label) + 5
+    y += 2
+    canvas.put(
+        2,
+        y,
+        "Ajustes válidos: escala x1..x4. Un valor inválido vuelve al valor seguro.",
+        fg=theme.DIM,
+    )
+    footer = _SETTINGS_FOOTER
+    if ascii_mode:
+        footer = footer.replace("│", theme.ASCII_VERTICAL)
+    canvas.fill(0, BOTTOM_BAR_Y, SCREEN_WIDTH, 1, fg=theme.BAR_FG, bg=theme.BAR_BG)
+    canvas.put(
+        0,
+        BOTTOM_BAR_Y,
+        (footer + " " * SCREEN_WIDTH)[:SCREEN_WIDTH],
+        fg=theme.BAR_FG,
+        bg=theme.BAR_BG,
+        bold=True,
+    )
+    return _apply_palette(canvas.to_screen(), settings.palette)
+
+
+def _si_no(value: bool) -> str:
+    return "SÍ" if value else "NO"
 
 
 def render_replay_screen(
