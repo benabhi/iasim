@@ -123,6 +123,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="set the autosave cadence in ticks (0 disables)",
     )
     parser.add_argument("--no-autosave", action="store_true", help="disable automatic saves")
+    parser.add_argument(
+        "--show-tokens",
+        action="store_true",
+        help="print per-slot invite tokens on the console (never written to logs)",
+    )
     parser.add_argument("--log-dir", type=Path, help="set the run log directory")
     parser.add_argument(
         "command",
@@ -194,7 +199,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"MCP endpoint: {server.mcp_url}")
         if server.warning is not None:
             print(f"warning: {server.warning}")
-        print(f"agents file: {run_dir / 'agents.json'} (tokens are never printed)")
+        if args.show_tokens:
+            print(
+                f"agents file: {run_dir / 'agents.json'} (invite tokens shown below; console only)"
+            )
+            _print_invite_tokens(session, server.mcp_url)
+        else:
+            print(f"agents file: {run_dir / 'agents.json'} (tokens are never printed)")
         if headless:
             print("headless mode: MCP only; press Ctrl+C to stop")
             wait_for_shutdown()
@@ -220,6 +231,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 session.finish()
 
     return int(ExitCode.SUCCESS)
+
+
+def _print_invite_tokens(session: GameSession, mcp_url: str) -> None:
+    """Print per-slot invite credentials to the console only."""
+    print("invite tokens (private; anyone with one can use that slot):")
+    print("  WARNING: do not share this console or paste these tokens in public channels.")
+    for index, token in enumerate(session.tokens, start=1):
+        print(f"  slot {index} (ag_{index:02d})")
+        print(f"    URL: {mcp_url}")
+        print(f"    Authorization: Bearer {token}")
 
 
 def _create_session(

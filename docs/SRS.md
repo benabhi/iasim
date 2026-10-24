@@ -1527,6 +1527,7 @@ confirm_destructive = true
 | `--autosave-every N` | Cadencia de autoguardado. |
 | `--no-autosave` | Desactiva autoguardado. |
 | `--log-dir PATH` | Directorio de logs. |
+| `--show-tokens` | Muestra en consola un bloque de invitación por slot (URL y `Authorization: Bearer`); nunca se escribe en logs. |
 | `--dev-open` | Desactiva auth solo en loopback. |
 | `--load PATH` | Carga una sesión guardada. |
 | `--replay PATH` | Reproduce una corrida. |

@@ -298,6 +298,54 @@ port = 8765
         first[2].assert_called_once()
         second[2].assert_called_once()
 
+    def test_show_tokens_prints_invite_credentials_without_logging_them(self) -> None:
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            with redirect_stdout(output):
+                code, _server, gui, wait, start = self._run(
+                    [
+                        "serve",
+                        "--show-tokens",
+                        "--headless",
+                        "--seed",
+                        "7",
+                        "--log-dir",
+                        directory,
+                    ]
+                )
+            session = start.call_args.args[0]
+            run_dir = next(Path(directory).iterdir())
+            log_text = "\n".join(
+                path.read_text(encoding="utf-8", errors="ignore")
+                for path in run_dir.iterdir()
+                if path.is_file() and path.name != "agents.json"
+            )
+
+        self.assertEqual(code, 0)
+        gui.assert_not_called()
+        wait.assert_called_once()
+        for token in session.tokens:
+            self.assertIn(token, output.getvalue())
+            self.assertNotIn(token, log_text)
+        self.assertIn("Authorization: Bearer", output.getvalue())
+        self.assertIn("WARNING: do not share", output.getvalue())
+        self.assertIn("slot 1 (ag_01)", output.getvalue())
+
+    def test_default_startup_never_prints_tokens(self) -> None:
+        output = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            with redirect_stdout(output):
+                code, _server, _gui, _wait, start = self._run(
+                    ["serve", "--headless", "--seed", "7", "--log-dir", directory]
+                )
+            session = start.call_args.args[0]
+
+        self.assertEqual(code, 0)
+        for token in session.tokens:
+            self.assertNotIn(token, output.getvalue())
+        self.assertNotIn("Authorization: Bearer", output.getvalue())
+        self.assertIn("tokens are never printed", output.getvalue())
+
     def test_lan_startup_prints_url_and_warning_but_never_tokens(self) -> None:
         output = io.StringIO()
         with tempfile.TemporaryDirectory() as directory:
