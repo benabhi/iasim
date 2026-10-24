@@ -96,6 +96,7 @@ from iasim.domain.weather import (
 )
 from iasim.errors import PersistenceError
 from iasim.persistence.logs import SessionLogs
+from iasim.persistence.state import SNAPSHOTS_DIRNAME, write_snapshot
 from iasim.protocol import (
     MAX_PROTOCOL_VERSION_LENGTH,
     PROTOCOL_VERSION,
@@ -162,6 +163,7 @@ class GameSession:
         weather_max_ticks: int = DEFAULT_WEATHER_MAX_TICKS,
         usage_pricing: Mapping[str, ModelPricing] | None = None,
         log_dir: Path | None = None,
+        snapshot_every_ticks: int = 100,
         wall_clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if seed < 0:
@@ -179,6 +181,8 @@ class GameSession:
             )
         if max_agents is not None and not 1 <= max_agents <= MAX_AGENTS:
             raise ValueError(f"max_agents must be within [1, {MAX_AGENTS}], got {max_agents}")
+        if snapshot_every_ticks < 1:
+            raise ValueError(f"snapshot_every_ticks must be positive, got {snapshot_every_ticks}")
 
         self._custom_layout = layout
         generated_count = max_agents if max_agents is not None else MAX_AGENTS
@@ -223,6 +227,8 @@ class GameSession:
         self._usage: dict[AgentId, list[UsageEntry]] = {}
         self._log_dir = log_dir
         self._logs = None if log_dir is None else SessionLogs(log_dir)
+        self._snapshot_every_ticks = snapshot_every_ticks
+        self._snapshot_dir = None if log_dir is None else Path(log_dir) / SNAPSHOTS_DIRNAME
         self._logged_corpse_ids: set[str] = set()
         self._mind_reports: dict[AgentId, MindReport] = {}
         self._mind_tick: dict[AgentId, int] = {}
@@ -1559,6 +1565,7 @@ class GameSession:
                 weather_max_ticks=self._weather_max_ticks,
                 usage_pricing=self._usage_pricing,
                 log_dir=self._log_dir,
+                snapshot_every_ticks=self._snapshot_every_ticks,
                 wall_clock=self._wall_clock,
             )
 
@@ -1648,6 +1655,7 @@ class GameSession:
         self._state = self._engine.state
         self._record_result(result)
         self._update_phase_locked()
+        self._maybe_snapshot_locked()
         self._condition.notify_all()
 
     def _expire_turn_if_due_locked(self) -> None:
@@ -1698,7 +1706,16 @@ class GameSession:
         self._state = self._engine.state
         self._record_result(result)
         self._update_phase_locked()
+        self._maybe_snapshot_locked()
         self._condition.notify_all()
+
+    def _maybe_snapshot_locked(self) -> None:
+        """Write a periodic snapshot when the tick is due."""
+        if self._snapshot_dir is None or self._snapshot_every_ticks <= 0:
+            return
+        if self._state.tick == 0 or self._state.tick % self._snapshot_every_ticks:
+            return
+        write_snapshot(self._snapshot_dir, self._state)
 
     def _note_response_locked(self, agent: Agent) -> Agent:
         """Mark a connected absent agent as active again after it responds."""

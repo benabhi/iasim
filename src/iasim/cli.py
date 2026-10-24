@@ -154,6 +154,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 weather_max_ticks=config.weather.weather_max_ticks,
                 usage_pricing=_usage_pricing(config),
                 log_dir=run_dir,
+                snapshot_every_ticks=config.logs.snapshot_every_ticks,
             )
             run_server(session, host=config.mcp.host, port=config.mcp.port)
         except KeyboardInterrupt:
