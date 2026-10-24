@@ -78,6 +78,14 @@ def _layout() -> WorldLayout:
     )
 
 
+def _two_agent_layout() -> WorldLayout:
+    return WorldLayout(
+        seed=42,
+        world=WorldMap(width=6, height=6, tiles=(TileType.GRASS,) * 36),
+        spawn_points=(Position(2, 2), Position(3, 2)),
+    )
+
+
 def _data(result: Any) -> dict[str, Any]:
     content = result.structured_content
     if content is None:
@@ -434,6 +442,150 @@ class McpServerTests(unittest.TestCase):
                     after = _data(await client.call_tool("iasim_observe", {}))
                     self.assertFalse(after["ok"])
                     self.assertEqual(after["error"]["code"], "UNAUTHORIZED")
+
+            asyncio.run(flow())
+        finally:
+            server.should_exit = True
+            server.force_exit = True
+            thread.join(timeout=10)
+
+        self.assertFalse(thread.is_alive())
+
+    def test_http_request_ids_are_idempotent_and_scoped(self) -> None:
+        session = GameSession(42, layout=_two_agent_layout())
+        token_a = session.tokens[0]
+        token_b = session.tokens[1]
+        _, app = create_app(session)
+        server, thread, port = _start_server(app)
+        try:
+
+            async def flow() -> None:
+                headers_a = {"Authorization": f"Bearer {token_a}"}
+                headers_b = {"Authorization": f"Bearer {token_b}"}
+                async with (
+                    create_mcp_http_client(headers=headers_a) as http_a,
+                    streamable_http_client(
+                        f"http://127.0.0.1:{port}/mcp",
+                        http_client=http_a,
+                    ) as (read_a, write_a),
+                    ClientSession(read_a, write_a) as client_a,
+                    create_mcp_http_client(headers=headers_b) as http_b,
+                    streamable_http_client(
+                        f"http://127.0.0.1:{port}/mcp",
+                        http_client=http_b,
+                    ) as (read_b, write_b),
+                    ClientSession(read_b, write_b) as client_b,
+                ):
+                    await client_a.initialize()
+                    await client_b.initialize()
+                    joined_a = _data(await client_a.call_tool("iasim_join", {"name": "Nia"}))
+                    joined_b = _data(await client_b.call_tool("iasim_join", {"name": "Kai"}))
+                    self.assertEqual(joined_a["agent_id"], "ag_01")
+                    self.assertEqual(joined_b["agent_id"], "ag_02")
+
+                    first = _data(
+                        await client_a.call_tool(
+                            "iasim_wait",
+                            {"tick": 0, "request_id": "req-a1"},
+                        )
+                    )
+                    self.assertTrue(first["ok"])
+                    replay = _data(
+                        await client_a.call_tool(
+                            "iasim_wait",
+                            {"tick": 0, "request_id": "req-a1"},
+                        )
+                    )
+                    self.assertEqual(replay, first)
+
+                    duplicate = _data(
+                        await client_a.call_tool(
+                            "iasim_wait",
+                            {"tick": 0, "request_id": "req-a2"},
+                        )
+                    )
+                    self.assertEqual(duplicate["error"]["code"], "ALREADY_ACTED")
+                    self.assertEqual(
+                        duplicate["error"]["details"],
+                        {"agent_id": "ag_01", "tick": 0},
+                    )
+
+                    self.assertTrue(
+                        _data(
+                            await client_b.call_tool(
+                                "iasim_wait",
+                                {"tick": 0, "request_id": "req-b1"},
+                            )
+                        )["ok"]
+                    )
+                    self.assertEqual(session.tick, 1)
+
+                    stale = _data(
+                        await client_a.call_tool(
+                            "iasim_wait",
+                            {"tick": 0, "request_id": "req-stale"},
+                        )
+                    )
+                    self.assertEqual(stale["error"]["code"], "STALE_TICK")
+                    self.assertEqual(
+                        stale["error"]["details"],
+                        {"received_tick": 0, "current_tick": 1},
+                    )
+
+                    # The action rate limiter allows five calls per second per
+                    # agent; refill the bucket before the next burst.
+                    time.sleep(1.1)
+
+                    conflict = _data(
+                        await client_a.call_tool(
+                            "iasim_wait",
+                            {"tick": 1, "request_id": "req-a1"},
+                        )
+                    )
+                    self.assertEqual(conflict["error"]["code"], "REQUEST_ID_CONFLICT")
+
+                    moved = _data(
+                        await client_a.call_tool(
+                            "iasim_move",
+                            {"tick": 1, "dx": 0, "dy": 1, "request_id": "req-move"},
+                        )
+                    )
+                    self.assertTrue(moved["ok"])
+                    moved_replay = _data(
+                        await client_a.call_tool(
+                            "iasim_move",
+                            {"tick": 1, "dx": 0, "dy": 1, "request_id": "req-move"},
+                        )
+                    )
+                    self.assertEqual(moved_replay, moved)
+
+                    self.assertTrue(
+                        _data(
+                            await client_b.call_tool(
+                                "iasim_wait",
+                                {"tick": 1, "request_id": "req-b2"},
+                            )
+                        )["ok"]
+                    )
+                    observation = _data(await client_a.call_tool("iasim_observe", {}))
+                    self.assertEqual(observation["tick"], 2)
+                    self.assertEqual(observation["agent"]["pos"], [2, 3])
+
+                    shared_a = _data(
+                        await client_a.call_tool(
+                            "iasim_wait",
+                            {"tick": 2, "request_id": "shared"},
+                        )
+                    )
+                    shared_b = _data(
+                        await client_b.call_tool(
+                            "iasim_wait",
+                            {"tick": 2, "request_id": "shared"},
+                        )
+                    )
+                    self.assertTrue(shared_a["ok"])
+                    self.assertTrue(shared_b["ok"])
+                    self.assertEqual(session.tick, 3)
 
             asyncio.run(flow())
         finally:
