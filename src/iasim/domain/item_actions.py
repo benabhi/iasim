@@ -1,4 +1,4 @@
-"""Gather, ground-item, food, drink, and waterskin action resolvers."""
+"""Gather, ground-item, equipment, food, drink, and waterskin resolvers."""
 
 from __future__ import annotations
 
@@ -54,6 +54,12 @@ class ItemActionOutcome(StrEnum):
     INVALID_QUANTITY = "invalid_quantity"
     USED = "used"
     NOT_USABLE = "not_usable"
+    EQUIPPED = "equipped"
+    UNEQUIPPED = "unequipped"
+    NOT_EQUIPPABLE = "not_equippable"
+    SLOT_OCCUPIED = "slot_occupied"
+    EMPTY_SLOT = "empty_slot"
+    INVALID_SLOT = "invalid_slot"
     NOT_NEEDED = "not_needed"
     NOT_FOOD = "not_food"
     NOT_DRINKABLE = "not_drinkable"
@@ -90,6 +96,18 @@ def item_action_resolvers(catalog: Catalog) -> dict[ActionKind, ActionResolver]:
     ) -> tuple[SessionState, tuple[TurnEvent, ...]]:
         return resolve_use_item(state, action, catalog)
 
+    def equip(
+        state: SessionState,
+        action: Action,
+    ) -> tuple[SessionState, tuple[TurnEvent, ...]]:
+        return resolve_equip(state, action, catalog)
+
+    def unequip(
+        state: SessionState,
+        action: Action,
+    ) -> tuple[SessionState, tuple[TurnEvent, ...]]:
+        return resolve_unequip(state, action)
+
     return {
         ActionKind.GATHER: gather,
         ActionKind.PICKUP: pickup,
@@ -98,6 +116,8 @@ def item_action_resolvers(catalog: Catalog) -> dict[ActionKind, ActionResolver]:
         ActionKind.DRINK: drink,
         ActionKind.FILL: fill,
         ActionKind.USE_ITEM: use_item,
+        ActionKind.EQUIP: equip,
+        ActionKind.UNEQUIP: unequip,
     }
 
 
@@ -355,6 +375,65 @@ def resolve_use_item(
     return (
         _replace_agent(state, replace(agent, inventory=inventory, bleeding=False)),
         (_event(action, ItemActionOutcome.USED),),
+    )
+
+
+def resolve_equip(
+    state: SessionState,
+    action: Action,
+    catalog: Catalog,
+) -> tuple[SessionState, tuple[TurnEvent, ...]]:
+    """Equip one inventory item into the slot declared by the catalog."""
+    item_id = action.payload_dict().get("item_id")
+    if not isinstance(item_id, str) or not item_id:
+        return state, (_event(action, ItemActionOutcome.INVALID_TARGET),)
+    agent = _find_agent(state, action.agent_id)
+    if agent is None:
+        return state, (_event(action, ItemActionOutcome.UNKNOWN_AGENT),)
+    if agent.inventory.stack_for(item_id) is None:
+        return state, (_event(action, ItemActionOutcome.MISSING_ITEM),)
+    try:
+        spec = catalog.item(item_id)
+    except ValueError:
+        return state, (_event(action, ItemActionOutcome.NOT_EQUIPPABLE),)
+    if spec.equip_slot is None:
+        return state, (_event(action, ItemActionOutcome.NOT_EQUIPPABLE),)
+    if agent.equipment.item(spec.equip_slot) is not None:
+        return state, (_event(action, ItemActionOutcome.SLOT_OCCUPIED),)
+    try:
+        updated = agent.equip(spec)
+    except InventoryError:
+        return state, (_event(action, ItemActionOutcome.NOT_EQUIPPABLE),)
+    return (
+        _replace_agent(state, updated),
+        (_event(action, ItemActionOutcome.EQUIPPED),),
+    )
+
+
+def resolve_unequip(
+    state: SessionState,
+    action: Action,
+) -> tuple[SessionState, tuple[TurnEvent, ...]]:
+    """Move one equipped item back into the inventory."""
+    slot_text = action.payload_dict().get("slot")
+    if not isinstance(slot_text, str) or not slot_text:
+        return state, (_event(action, ItemActionOutcome.INVALID_SLOT),)
+    try:
+        slot = EquipSlot(slot_text)
+    except ValueError:
+        return state, (_event(action, ItemActionOutcome.INVALID_SLOT),)
+    agent = _find_agent(state, action.agent_id)
+    if agent is None:
+        return state, (_event(action, ItemActionOutcome.UNKNOWN_AGENT),)
+    if agent.equipment.item(slot) is None:
+        return state, (_event(action, ItemActionOutcome.EMPTY_SLOT),)
+    try:
+        updated = agent.unequip(slot)
+    except InventoryError:
+        return state, (_event(action, ItemActionOutcome.INVENTORY_FULL),)
+    return (
+        _replace_agent(state, updated),
+        (_event(action, ItemActionOutcome.UNEQUIPPED),),
     )
 
 

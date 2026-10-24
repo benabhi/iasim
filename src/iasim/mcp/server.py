@@ -17,7 +17,10 @@ from starlette.responses import JSONResponse, Response
 from iasim.app.session import SCHEMA_VERSION, GameSession
 from iasim.config import is_loopback_host
 from iasim.domain.identifiers import AgentId
+from iasim.domain.items import EquipSlot
 from iasim.mcp.limits import MAX_TEXT_FIELD_LENGTH, LimitKind, RateLimiter
+from iasim.mcp.protocol import PROTOCOL_VERSION
+from iasim.mcp.schemas import PositiveQuantity, Tick, TimeoutMillis, TradeItem
 
 DEFAULT_RESOURCE_URL = "http://127.0.0.1:8765/mcp"
 DEFAULT_ISSUER_URL = "http://127.0.0.1:8765"
@@ -88,10 +91,11 @@ def create_server(
     resource_url: str = DEFAULT_RESOURCE_URL,
     issuer_url: str = DEFAULT_ISSUER_URL,
 ) -> MCPServer[Any]:
-    """Create the authenticated MCP server and minimal F0 tools."""
+    """Create the authenticated MCP server with the full MVP tool catalog."""
     limiter = RateLimiter()
     server: MCPServer[Any] = MCPServer(
         "IASim",
+        version=PROTOCOL_VERSION,
         token_verifier=SessionTokenVerifier(session),
         auth=AuthSettings(
             issuer_url=AnyHttpUrl(issuer_url),
@@ -109,7 +113,18 @@ def create_server(
         access = get_access_token()
         if access is None:
             return _unauthorized(session)
-        return session.join(name, access.token)
+        result = session.join(name, access.token)
+        if result.get("ok"):
+            result["protocol_version"] = PROTOCOL_VERSION
+        return result
+
+    @server.tool()
+    def iasim_leave() -> dict[str, Any]:
+        """Leave the session without dying and free the slot."""
+        agent_id = _guard(session, limiter, LimitKind.INFO)
+        if isinstance(agent_id, dict):
+            return agent_id
+        return session.leave(agent_id)
 
     @server.tool()
     def iasim_observe() -> dict[str, Any]:
@@ -120,7 +135,48 @@ def create_server(
         return session.observe(agent_id)
 
     @server.tool()
-    def iasim_move(tick: int, dx: int, dy: int) -> dict[str, Any]:
+    def iasim_get_session_info() -> dict[str, Any]:
+        """Return day, tick, phase, and roster; never the seed or the RNG."""
+        agent_id = _guard(session, limiter, LimitKind.INFO)
+        if isinstance(agent_id, dict):
+            return agent_id
+        result = session.info(agent_id)
+        if result.get("ok"):
+            result["protocol_version"] = PROTOCOL_VERSION
+        return result
+
+    @server.tool()
+    def iasim_get_recipes() -> dict[str, Any]:
+        """List every recipe with its ingredients and station requirement."""
+        agent_id = _guard(session, limiter, LimitKind.INFO)
+        if isinstance(agent_id, dict):
+            return agent_id
+        return session.recipes()
+
+    @server.tool()
+    def iasim_get_inventory() -> dict[str, Any]:
+        """Return the inventory, equipment, and carrying capacity."""
+        agent_id = _guard(session, limiter, LimitKind.INFO)
+        if isinstance(agent_id, dict):
+            return agent_id
+        return session.inventory_for(agent_id)
+
+    @server.tool()
+    def iasim_inspect(
+        target_id: str | None = None,
+        x: int | None = None,
+        y: int | None = None,
+    ) -> dict[str, Any]:
+        """Return details of one visible agent, corpse, or tile."""
+        agent_id = _guard(session, limiter, LimitKind.INFO)
+        if isinstance(agent_id, dict):
+            return agent_id
+        if _text_too_long(target_id):
+            return _message_too_long(session)
+        return session.inspect(agent_id, target_id, x, y)
+
+    @server.tool()
+    def iasim_move(tick: Tick, dx: int, dy: int) -> dict[str, Any]:
         """Queue a one-cell move in one of eight directions."""
         agent_id = _guard(session, limiter, LimitKind.ACTION)
         if isinstance(agent_id, dict):
@@ -128,7 +184,7 @@ def create_server(
         return session.move(agent_id, tick, dx, dy)
 
     @server.tool()
-    def iasim_move_to(tick: int, x: int, y: int) -> dict[str, Any]:
+    def iasim_move_to(tick: Tick, x: int, y: int) -> dict[str, Any]:
         """Advance one step along a deterministic route to the target."""
         agent_id = _guard(session, limiter, LimitKind.ACTION)
         if isinstance(agent_id, dict):
@@ -136,7 +192,7 @@ def create_server(
         return session.move_to(agent_id, tick, x, y)
 
     @server.tool()
-    def iasim_wait(tick: int) -> dict[str, Any]:
+    def iasim_wait(tick: Tick) -> dict[str, Any]:
         """Queue a wait action for the current tick."""
         agent_id = _guard(session, limiter, LimitKind.ACTION)
         if isinstance(agent_id, dict):
@@ -144,7 +200,7 @@ def create_server(
         return session.wait(agent_id, tick)
 
     @server.tool()
-    def iasim_rest(tick: int) -> dict[str, Any]:
+    def iasim_rest(tick: Tick) -> dict[str, Any]:
         """Rest for one tick and recover energy."""
         agent_id = _guard(session, limiter, LimitKind.ACTION)
         if isinstance(agent_id, dict):
@@ -152,7 +208,7 @@ def create_server(
         return session.rest(agent_id, tick)
 
     @server.tool()
-    def iasim_sleep(tick: int, until: str | None = None) -> dict[str, Any]:
+    def iasim_sleep(tick: Tick, until: str | None = None) -> dict[str, Any]:
         """Sleep until energy_full, dawn, or hours:N."""
         agent_id = _guard(session, limiter, LimitKind.ACTION)
         if isinstance(agent_id, dict):
@@ -163,7 +219,7 @@ def create_server(
 
     @server.tool()
     def iasim_gather(
-        tick: int,
+        tick: Tick,
         x: int,
         y: int,
         node_id: str | None = None,
@@ -178,7 +234,7 @@ def create_server(
 
     @server.tool()
     def iasim_pickup(
-        tick: int,
+        tick: Tick,
         x: int,
         y: int,
         item_id: str | None = None,
@@ -192,7 +248,7 @@ def create_server(
         return session.pickup(agent_id, tick, x, y, item_id)
 
     @server.tool()
-    def iasim_drop(tick: int, item_id: str, qty: int = 1) -> dict[str, Any]:
+    def iasim_drop(tick: Tick, item_id: str, qty: PositiveQuantity = 1) -> dict[str, Any]:
         """Drop one or more units of an inventory item."""
         agent_id = _guard(session, limiter, LimitKind.ACTION)
         if isinstance(agent_id, dict):
@@ -202,7 +258,7 @@ def create_server(
         return session.drop(agent_id, tick, item_id, qty)
 
     @server.tool()
-    def iasim_eat(tick: int, item_id: str) -> dict[str, Any]:
+    def iasim_eat(tick: Tick, item_id: str) -> dict[str, Any]:
         """Eat one unit of food from the inventory."""
         agent_id = _guard(session, limiter, LimitKind.ACTION)
         if isinstance(agent_id, dict):
@@ -213,7 +269,7 @@ def create_server(
 
     @server.tool()
     def iasim_drink(
-        tick: int,
+        tick: Tick,
         x: int | None = None,
         y: int | None = None,
         item_id: str | None = None,
@@ -227,7 +283,7 @@ def create_server(
         return session.drink(agent_id, tick, x=x, y=y, item_id=item_id)
 
     @server.tool()
-    def iasim_use(tick: int, item_id: str) -> dict[str, Any]:
+    def iasim_use(tick: Tick, item_id: str) -> dict[str, Any]:
         """Use a consumable such as a bandage from the inventory."""
         agent_id = _guard(session, limiter, LimitKind.ACTION)
         if isinstance(agent_id, dict):
@@ -237,7 +293,25 @@ def create_server(
         return session.use_item(agent_id, tick, item_id)
 
     @server.tool()
-    def iasim_fill(tick: int, item_id: str) -> dict[str, Any]:
+    def iasim_equip(tick: Tick, item_id: str) -> dict[str, Any]:
+        """Equip one inventory item into the slot declared by the catalog."""
+        agent_id = _guard(session, limiter, LimitKind.ACTION)
+        if isinstance(agent_id, dict):
+            return agent_id
+        if _text_too_long(item_id):
+            return _message_too_long(session)
+        return session.equip(agent_id, tick, item_id)
+
+    @server.tool()
+    def iasim_unequip(tick: Tick, slot: EquipSlot) -> dict[str, Any]:
+        """Move one equipped item back into the inventory."""
+        agent_id = _guard(session, limiter, LimitKind.ACTION)
+        if isinstance(agent_id, dict):
+            return agent_id
+        return session.unequip(agent_id, tick, slot.value)
+
+    @server.tool()
+    def iasim_fill(tick: Tick, item_id: str) -> dict[str, Any]:
         """Fill a waterskin from adjacent fresh water."""
         agent_id = _guard(session, limiter, LimitKind.ACTION)
         if isinstance(agent_id, dict):
@@ -247,7 +321,7 @@ def create_server(
         return session.fill(agent_id, tick, item_id)
 
     @server.tool()
-    def iasim_craft(tick: int, recipe_id: str) -> dict[str, Any]:
+    def iasim_craft(tick: Tick, recipe_id: str) -> dict[str, Any]:
         """Craft one recipe when ingredients and station requirements are met."""
         agent_id = _guard(session, limiter, LimitKind.ACTION)
         if isinstance(agent_id, dict):
@@ -258,7 +332,7 @@ def create_server(
 
     @server.tool()
     def iasim_build(
-        tick: int,
+        tick: Tick,
         structure_id: str,
         x: int,
         y: int,
@@ -282,7 +356,7 @@ def create_server(
         return session.say(agent_id, message, target_id)
 
     @server.tool()
-    def iasim_attack(tick: int, target_id: str) -> dict[str, Any]:
+    def iasim_attack(tick: Tick, target_id: str) -> dict[str, Any]:
         """Attack an adjacent living agent with the equipped weapon."""
         agent_id = _guard(session, limiter, LimitKind.ACTION)
         if isinstance(agent_id, dict):
@@ -292,7 +366,7 @@ def create_server(
         return session.attack(agent_id, tick, target_id)
 
     @server.tool()
-    def iasim_throw(tick: int, item_id: str, target_id: str) -> dict[str, Any]:
+    def iasim_throw(tick: Tick, item_id: str, target_id: str) -> dict[str, Any]:
         """Throw a stone at a visible target up to four tiles away."""
         agent_id = _guard(session, limiter, LimitKind.ACTION)
         if isinstance(agent_id, dict):
@@ -302,7 +376,7 @@ def create_server(
         return session.throw(agent_id, tick, item_id, target_id)
 
     @server.tool()
-    def iasim_flee(tick: int, target_id: str) -> dict[str, Any]:
+    def iasim_flee(tick: Tick, target_id: str) -> dict[str, Any]:
         """Flee up to two cells away from a living target."""
         agent_id = _guard(session, limiter, LimitKind.ACTION)
         if isinstance(agent_id, dict):
@@ -312,7 +386,7 @@ def create_server(
         return session.flee(agent_id, tick, target_id)
 
     @server.tool()
-    def iasim_loot(tick: int, corpse_id: str) -> dict[str, Any]:
+    def iasim_loot(tick: Tick, corpse_id: str) -> dict[str, Any]:
         """Loot all remaining items from an adjacent corpse."""
         agent_id = _guard(session, limiter, LimitKind.ACTION)
         if isinstance(agent_id, dict):
@@ -322,7 +396,7 @@ def create_server(
         return session.loot(agent_id, tick, corpse_id)
 
     @server.tool()
-    def iasim_offer_alliance(tick: int, target_id: str) -> dict[str, Any]:
+    def iasim_offer_alliance(tick: Tick, target_id: str) -> dict[str, Any]:
         """Offer an alliance to a nearby living agent."""
         agent_id = _guard(session, limiter, LimitKind.ACTION)
         if isinstance(agent_id, dict):
@@ -332,7 +406,7 @@ def create_server(
         return session.offer_alliance(agent_id, tick, target_id)
 
     @server.tool()
-    def iasim_accept_alliance(tick: int, alliance_id: str) -> dict[str, Any]:
+    def iasim_accept_alliance(tick: Tick, alliance_id: str) -> dict[str, Any]:
         """Accept a pending alliance offer addressed to the agent."""
         agent_id = _guard(session, limiter, LimitKind.ACTION)
         if isinstance(agent_id, dict):
@@ -342,7 +416,7 @@ def create_server(
         return session.accept_alliance(agent_id, tick, alliance_id)
 
     @server.tool()
-    def iasim_break_alliance(tick: int, target_id: str) -> dict[str, Any]:
+    def iasim_break_alliance(tick: Tick, target_id: str) -> dict[str, Any]:
         """Break an alliance, or close a pending offer."""
         agent_id = _guard(session, limiter, LimitKind.ACTION)
         if isinstance(agent_id, dict):
@@ -353,24 +427,31 @@ def create_server(
 
     @server.tool()
     def iasim_offer_trade(
-        tick: int,
+        tick: Tick,
         target_id: str,
-        offer: list[dict[str, Any]],
-        request: list[dict[str, Any]],
+        offer: list[TradeItem],
+        request: list[TradeItem],
     ) -> dict[str, Any]:
         """Offer an item trade to a nearby living agent.
 
-        Each lot is a list of ``{"item_id": str, "qty": int}`` entries.
+        Each lot is a list of ``{"item_id": str, "qty": int}`` entries with no
+        extra keys; both lots must be non-empty.
         """
         agent_id = _guard(session, limiter, LimitKind.ACTION)
         if isinstance(agent_id, dict):
             return agent_id
         if _text_too_long(target_id):
             return _message_too_long(session)
-        return session.offer_trade(agent_id, tick, target_id, offer, request)
+        return session.offer_trade(
+            agent_id,
+            tick,
+            target_id,
+            [entry.model_dump() for entry in offer],
+            [entry.model_dump() for entry in request],
+        )
 
     @server.tool()
-    def iasim_accept_trade(tick: int, trade_id: str) -> dict[str, Any]:
+    def iasim_accept_trade(tick: Tick, trade_id: str) -> dict[str, Any]:
         """Accept an open trade offer and swap the items atomically."""
         agent_id = _guard(session, limiter, LimitKind.ACTION)
         if isinstance(agent_id, dict):
@@ -380,7 +461,7 @@ def create_server(
         return session.accept_trade(agent_id, tick, trade_id)
 
     @server.tool()
-    def iasim_decline_trade(tick: int, trade_id: str) -> dict[str, Any]:
+    def iasim_decline_trade(tick: Tick, trade_id: str) -> dict[str, Any]:
         """Decline an open trade offer."""
         agent_id = _guard(session, limiter, LimitKind.ACTION)
         if isinstance(agent_id, dict):
@@ -391,7 +472,7 @@ def create_server(
 
     @server.tool()
     def iasim_report_mind(
-        tick: int,
+        tick: Tick,
         intent: str,
         thought: str,
         plan: str | None = None,
@@ -412,7 +493,7 @@ def create_server(
 
     @server.tool()
     def iasim_report_usage(
-        tick: int,
+        tick: Tick,
         input_tokens: int,
         output_tokens: int,
         model: str,
@@ -434,7 +515,10 @@ def create_server(
         )
 
     @server.tool()
-    def iasim_wait_for_tick(since_tick: int, timeout_ms: int = 1000) -> dict[str, Any]:
+    def iasim_wait_for_tick(
+        since_tick: Tick,
+        timeout_ms: TimeoutMillis = 1000,
+    ) -> dict[str, Any]:
         """Wait until a tick newer than since_tick is available."""
         agent_id = _guard(session, limiter, LimitKind.INFO)
         if isinstance(agent_id, dict):

@@ -96,6 +96,8 @@ class GameSessionTests(unittest.TestCase):
                 "craft",
                 "build",
                 "use",
+                "equip",
+                "unequip",
                 "attack",
                 "throw",
                 "flee",
