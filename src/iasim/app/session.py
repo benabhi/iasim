@@ -96,7 +96,14 @@ from iasim.domain.weather import (
 )
 from iasim.errors import PersistenceError
 from iasim.persistence.logs import SessionLogs
-from iasim.persistence.state import SNAPSHOTS_DIRNAME, write_snapshot
+from iasim.persistence.state import (
+    SNAPSHOTS_DIRNAME,
+    action_from_payload,
+    action_to_payload,
+    read_session_file,
+    write_snapshot,
+    write_state_file,
+)
 from iasim.protocol import (
     MAX_PROTOCOL_VERSION_LENGTH,
     PROTOCOL_VERSION,
@@ -229,6 +236,8 @@ class GameSession:
         self._logs = None if log_dir is None else SessionLogs(log_dir)
         self._snapshot_every_ticks = snapshot_every_ticks
         self._snapshot_dir = None if log_dir is None else Path(log_dir) / SNAPSHOTS_DIRNAME
+        self._last_saved_tick: int | None = None
+        self._last_saved_file: str | None = None
         self._logged_corpse_ids: set[str] = set()
         self._mind_reports: dict[AgentId, MindReport] = {}
         self._mind_tick: dict[AgentId, int] = {}
@@ -1125,6 +1134,8 @@ class GameSession:
                     "max_ticks": self._weather_max_ticks,
                 },
                 "started_at": self._started_at,
+                "last_saved_tick": self._last_saved_tick,
+                "last_saved_file": self._last_saved_file,
                 "debug_used": False,
                 "finished": self._phase is SessionPhase.FINISHED,
                 "end_reason": (self._end_reason.value if self._end_reason is not None else None),
@@ -1568,6 +1579,130 @@ class GameSession:
                 snapshot_every_ticks=self._snapshot_every_ticks,
                 wall_clock=self._wall_clock,
             )
+
+    def save(self, path: Path | None = None) -> Path:
+        """Write a complete atomic save and record it in the session metadata."""
+        with self._lock:
+            if path is None:
+                if self._snapshot_dir is None:
+                    raise PersistenceError("no save location configured; pass an explicit path")
+                path = self._snapshot_dir / f"tick_{self._state.tick:06d}.json"
+            session_data: dict[str, Any] = {
+                "names": {
+                    str(agent_id): name
+                    for agent_id, name in sorted(
+                        self._names.items(),
+                        key=lambda entry: str(entry[0]),
+                    )
+                },
+                "max_agents": self._max_agents,
+                "phase": self._phase.value,
+                "waiting_reason": (
+                    self._waiting_reason.value if self._waiting_reason is not None else None
+                ),
+                "end_reason": (self._end_reason.value if self._end_reason is not None else None),
+                "final_state_hash": self._final_state_hash,
+                "pending_actions": [
+                    action_to_payload(self._pending_actions[agent_id])
+                    for agent_id in sorted(self._pending_actions)
+                ],
+            }
+            saved = write_state_file(Path(path), self._state, {"session": session_data})
+            self._last_saved_tick = self._state.tick
+            self._last_saved_file = str(saved.name)
+            self._write_session_metadata_locked()
+            self._log_event_locked("session_saved", path=str(saved.name))
+            return saved
+
+    @classmethod
+    def load(
+        cls,
+        path: Path,
+        *,
+        token_path: Path | None = None,
+        log_dir: Path | None = None,
+        snapshot_every_ticks: int = 100,
+        catalog: Catalog | None = None,
+        turn_timeout_ms: int = DEFAULT_TURN_TIMEOUT_MS,
+        timeout_disconnects: int = DEFAULT_TIMEOUT_DISCONNECTS,
+        weather_min_ticks: int = DEFAULT_WEATHER_MIN_TICKS,
+        weather_max_ticks: int = DEFAULT_WEATHER_MAX_TICKS,
+        usage_pricing: Mapping[str, ModelPricing] | None = None,
+        wall_clock: Callable[[], float] = time.monotonic,
+    ) -> GameSession:
+        """Restore a saved session, including its pending turn queue."""
+        resolved_catalog = catalog if catalog is not None else load_catalog()
+        resolved_path = Path(path)
+        state, session_data = read_session_file(resolved_path, resolved_catalog)
+        saved_agents = _read_saved_agents(token_path)
+        if saved_agents is not None:
+            tokens, spawn_points = saved_agents
+        else:
+            tokens = None
+            spawn_points = tuple(agent.position for agent in state.agents) or (Position(1, 1),)
+        layout = WorldLayout(
+            seed=state.seed,
+            world=state.world,
+            spawn_points=spawn_points,
+        )
+        session = cls(
+            state.seed,
+            tick_minutes=state.tick_minutes,
+            turn_timeout_ms=turn_timeout_ms,
+            timeout_disconnects=timeout_disconnects,
+            max_agents=len(spawn_points),
+            layout=layout,
+            catalog=resolved_catalog,
+            weather_min_ticks=weather_min_ticks,
+            weather_max_ticks=weather_max_ticks,
+            usage_pricing=usage_pricing,
+            log_dir=log_dir,
+            snapshot_every_ticks=snapshot_every_ticks,
+            wall_clock=wall_clock,
+        )
+        session._state = state
+        session._engine = TurnEngine(
+            state,
+            resolvers=session._resolvers,
+            tick_effect=session._apply_tick_effects,
+        )
+        session._names = {
+            AgentId(str(agent_id)): str(name)
+            for agent_id, name in session_data.get("names", {}).items()
+        }
+        session._joined_slots.clear()
+        session._token_agents.clear()
+        if tokens is not None:
+            session._slot_tokens = tokens
+            session._token_slots = {token: slot for slot, token in enumerate(tokens)}
+            for slot, token in enumerate(tokens):
+                agent_id = AgentId(f"ag_{slot + 1:02d}")
+                if any(agent.agent_id == agent_id for agent in state.agents):
+                    session._token_agents[token] = agent_id
+                    session._joined_slots.add(slot)
+        session._logged_corpse_ids = {corpse.corpse_id for corpse in state.corpses}
+        phase_name = session_data.get("phase")
+        session._phase = SessionPhase(str(phase_name)) if phase_name else session._phase
+        waiting_name = session_data.get("waiting_reason")
+        session._waiting_reason = SessionWaitReason(str(waiting_name)) if waiting_name else None
+        end_name = session_data.get("end_reason")
+        session._end_reason = SessionEndReason(str(end_name)) if end_name else None
+        final_hash = session_data.get("final_state_hash")
+        session._final_state_hash = str(final_hash) if final_hash else None
+        if session._phase is not SessionPhase.FINISHED:
+            session._update_phase_locked()
+            for pending in session_data.get("pending_actions", []):
+                action = action_from_payload(pending)
+                session._engine.submit(action)
+                session._pending_actions[action.agent_id] = action
+            session._turn_deadline = None
+        session._logged_phase = session._phase
+        session._logged_waiting_reason = session._waiting_reason
+        session._log_event_locked("session_loaded", path=resolved_path.name)
+        session._write_session_metadata_locked()
+        if token_path is not None:
+            session._write_tokens(Path(token_path))
+        return session
 
     def health(self) -> dict[str, Any]:
         """Return a minimal health payload without session secrets."""
@@ -2307,6 +2442,34 @@ class GameSession:
             "tick": self._state.tick if tick is None else tick,
             "error": error,
         }
+
+
+def _read_saved_agents(
+    path: Path | None,
+) -> tuple[tuple[str, ...], tuple[Position, ...]] | None:
+    """Return one token and spawn per slot from an agents file, if it exists."""
+    if path is None:
+        return None
+    resolved = Path(path)
+    if not resolved.exists():
+        return None
+    try:
+        data = json.loads(resolved.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PersistenceError(f"cannot read agent file {resolved}: {exc}") from exc
+    if not isinstance(data, dict) or data.get("schema_version") != SCHEMA_VERSION:
+        raise PersistenceError(f"agent file {resolved} has an unsupported schema")
+    try:
+        entries = sorted(data["agents"], key=lambda entry: int(entry["slot"]))
+        tokens = tuple(str(entry["token"]) for entry in entries)
+        spawn_points = tuple(
+            Position(int(entry["spawn"][0]), int(entry["spawn"][1])) for entry in entries
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise PersistenceError(f"agent file {resolved} is malformed: {exc}") from exc
+    if not tokens:
+        raise PersistenceError(f"agent file {resolved} has no agent slots")
+    return tokens, spawn_points
 
 
 def _protocol_supported(value: object) -> bool:

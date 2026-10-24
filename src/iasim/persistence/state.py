@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from iasim.crafting import Catalog
+from iasim.domain.actions import Action, ActionKind
 from iasim.domain.agents import Agent, AgentAttributes, AgentStatus
 from iasim.domain.alliances import Alliance, AllianceStatus
 from iasim.domain.corpse import Corpse
@@ -221,16 +222,25 @@ def state_from_payload(payload: Mapping[str, Any], catalog: Catalog) -> SessionS
     return state
 
 
-def write_snapshot(directory: Path, state: SessionState) -> Path:
-    """Write one snapshot atomically and return its path."""
-    directory = Path(directory)
-    payload = {
+def write_state_file(
+    path: Path,
+    state: SessionState,
+    extra: Mapping[str, Any] | None = None,
+) -> Path:
+    """Write one complete state file atomically and return its path."""
+    path = Path(path)
+    payload: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "tick": state.tick,
         "state": state_to_payload(state),
     }
-    directory.mkdir(parents=True, exist_ok=True)
-    path = directory / f"tick_{state.tick:06d}.json"
+    if extra is not None:
+        reserved = {"schema_version", "tick", "state"}
+        duplicates = reserved.intersection(extra)
+        if duplicates:
+            raise SnapshotError(f"save payload overrides reserved keys: {sorted(duplicates)}")
+        payload.update(extra)
+    path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
     try:
         temporary.write_text(
@@ -240,30 +250,83 @@ def write_snapshot(directory: Path, state: SessionState) -> Path:
         temporary.replace(path)
     except OSError as exc:
         temporary.unlink(missing_ok=True)
-        raise SnapshotError(f"cannot write snapshot {path}: {exc}") from exc
+        raise SnapshotError(f"cannot write state file {path}: {exc}") from exc
     return path
 
 
-def read_snapshot(path: Path, catalog: Catalog) -> SessionState:
-    """Load one snapshot, rejecting incompatible schema versions."""
+def write_snapshot(directory: Path, state: SessionState) -> Path:
+    """Write one periodic snapshot atomically and return its path."""
+    directory = Path(directory)
+    return write_state_file(directory / f"tick_{state.tick:06d}.json", state)
+
+
+def read_session_file(
+    path: Path,
+    catalog: Catalog,
+) -> tuple[SessionState, dict[str, Any]]:
+    """Load a state file and its optional session section."""
     path = Path(path)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except OSError as exc:
-        raise SnapshotError(f"cannot read snapshot {path}: {exc}") from exc
+        raise SnapshotError(f"cannot read state file {path}: {exc}") from exc
     except json.JSONDecodeError as exc:
-        raise SnapshotError(f"snapshot {path} is not valid JSON: {exc}") from exc
+        raise SnapshotError(f"state file {path} is not valid JSON: {exc}") from exc
     if not isinstance(data, Mapping):
-        raise SnapshotError(f"snapshot {path} is not a JSON object")
+        raise SnapshotError(f"state file {path} is not a JSON object")
     version = data.get("schema_version")
     if version != SCHEMA_VERSION:
         raise SnapshotError(
-            f"snapshot {path} has schema_version {version!r}; this server reads {SCHEMA_VERSION!r}"
+            f"state file {path} has schema_version {version!r}; "
+            f"this server reads {SCHEMA_VERSION!r}"
         )
     state_data = data.get("state")
     if not isinstance(state_data, Mapping):
-        raise SnapshotError(f"snapshot {path} has no state payload")
-    return state_from_payload(state_data, catalog)
+        raise SnapshotError(f"state file {path} has no state payload")
+    session_data = data.get("session")
+    if session_data is None:
+        session_data = {}
+    if not isinstance(session_data, Mapping):
+        raise SnapshotError(f"state file {path} has an invalid session section")
+    return state_from_payload(state_data, catalog), dict(session_data)
+
+
+def read_snapshot(path: Path, catalog: Catalog) -> SessionState:
+    """Load one snapshot, rejecting incompatible schema versions."""
+    state, _ = read_session_file(path, catalog)
+    return state
+
+
+def action_to_payload(action: Action) -> dict[str, Any]:
+    """Serialize one pending action for a save file."""
+    return {
+        "agent_id": str(action.agent_id),
+        "tick": action.tick,
+        "kind": action.kind.value,
+        "payload": json.loads(json.dumps([[str(key), value] for key, value in action.payload])),
+    }
+
+
+def action_from_payload(payload: Mapping[str, Any]) -> Action:
+    """Rebuild one pending action from a save file."""
+    try:
+        entries = payload["payload"]
+        return Action(
+            AgentId(str(payload["agent_id"])),
+            int(payload["tick"]),
+            ActionKind(str(payload["kind"])),
+            tuple((str(key), _restore_value(value)) for key, value in (entry for entry in entries)),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SnapshotError(f"save contains an invalid pending action: {exc}") from exc
+
+
+def _restore_value(value: Any) -> Any:
+    if isinstance(value, list):
+        return tuple(_restore_value(item) for item in value)
+    if isinstance(value, Mapping):
+        return {str(key): _restore_value(item) for key, item in value.items()}
+    return value
 
 
 def _agent_payload(agent: Agent) -> dict[str, Any]:
