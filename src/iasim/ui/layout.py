@@ -24,6 +24,15 @@ from iasim.domain.weather import WeatherKind, WeatherState
 from iasim.domain.world import StructureKind
 from iasim.ui import theme
 from iasim.ui.controls import KEY_GUIDE, STATUS_GUIDE
+from iasim.ui.events import (
+    CATEGORY_LABELS,
+    EVENT_COLORS,
+    PAGE_SIZE,
+    EventRow,
+    filter_events,
+    page_count,
+    page_rows,
+)
 from iasim.ui.panel import PANEL_TABS, TAB_LABELS, PanelState, RightPanelTab
 from iasim.world.tcod_fov import compute_fov
 
@@ -662,6 +671,91 @@ def _render_world_footer(canvas: _Canvas, ascii_mode: bool) -> None:
     footer = (
         f"[Enter] Ver ficha F2 {separator} [TAB] Siguiente agente {separator} "
         f"[1-8] Seleccionar {separator} [ESC] Volver {separator} [F3] Cerrar mundo"
+    )
+    text = (footer + " " * SCREEN_WIDTH)[:SCREEN_WIDTH]
+    canvas.fill(0, BOTTOM_BAR_Y, SCREEN_WIDTH, 1, fg=theme.BAR_FG, bg=theme.BAR_BG)
+    canvas.put(0, BOTTOM_BAR_Y, text, fg=theme.BAR_FG, bg=theme.BAR_BG, bold=True)
+
+
+def render_events_screen(
+    rows: Sequence[EventRow],
+    *,
+    query: str = "",
+    category: str | None = None,
+    agent_id: str | None = None,
+    page: int = 0,
+    tick_minutes: int = 5,
+    ascii_mode: bool = False,
+) -> BaseScreen:
+    """Render the paginated F4 event log with filters and search."""
+    canvas = _Canvas()
+    canvas.fill(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, fg=theme.WHITE, bg=theme.BLACK)
+    filtered = filter_events(
+        rows,
+        query=query,
+        category=category,
+        agent_id=agent_id,
+    )
+    pages = page_count(len(filtered), PAGE_SIZE)
+    current = max(0, min(page, pages - 1))
+    visible = page_rows(filtered, current, PAGE_SIZE)
+    clock = SimulationClock(tick_minutes)
+    category_label = "TODOS" if category is None else CATEGORY_LABELS.get(category, category)
+    canvas.put(
+        2,
+        0,
+        f"F4 · EVENTOS · {len(filtered)}/{len(rows)} · Página {current + 1}/{pages}",
+        fg=theme.CYAN,
+        bold=True,
+    )
+    canvas.put(
+        2,
+        1,
+        f"Búsqueda: {query or '—'} · Filtro: {category_label} · Agente: {agent_id or 'TODOS'}",
+        fg=theme.DIM,
+    )
+    canvas.put(2, 2, _event_header_row(), fg=theme.DIM, bold=True)
+    y = 3
+    if not visible:
+        canvas.put(2, y, "— sin eventos para este filtro —", fg=theme.DIM)
+    for row in visible:
+        clock = SimulationClock(tick_minutes)
+        clock.advance(row.tick)
+        canvas.put(
+            2,
+            y,
+            _event_table_row(row, clock.hour, clock.minute),
+            fg=EVENT_COLORS.get(row.category, theme.WHITE),
+        )
+        y += 1
+    canvas.put(
+        2,
+        BOTTOM_BAR_Y - 1,
+        f"{len(visible)} visibles · PgUp/PgDn pagina · / buscar · T tipo · A agente · ESC volver",
+        fg=theme.DIM,
+    )
+    _render_events_footer(canvas, ascii_mode)
+    return canvas.to_screen()
+
+
+def _event_header_row() -> str:
+    return f"{'TICK':>5} {'HORA':<6} {'TIPO':<12} {'AGENTES':<15} {'MENSAJE':<88} RESULTADO"
+
+
+def _event_table_row(row: EventRow, hour: int, minute: int) -> str:
+    return (
+        f"{row.tick:>5} {hour:02d}:{minute:02d} "
+        f"{CATEGORY_LABELS.get(row.category, row.category):<12} "
+        f"{_clip(row.agents, 15):<15} {_clip(row.message, 88):<88} "
+        f"{_clip(row.result, 18)}"
+    )
+
+
+def _render_events_footer(canvas: _Canvas, ascii_mode: bool) -> None:
+    separator = theme.ASCII_VERTICAL if ascii_mode else "│"
+    footer = (
+        f"[/] Buscar {separator} [T] Tipo {separator} [A] Agente {separator} "
+        f"[PgUp/PgDn] Página {separator} [ESC] Volver {separator} [F4] Cerrar log"
     )
     text = (footer + " " * SCREEN_WIDTH)[:SCREEN_WIDTH]
     canvas.fill(0, BOTTOM_BAR_Y, SCREEN_WIDTH, 1, fg=theme.BAR_FG, bg=theme.BAR_BG)
