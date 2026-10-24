@@ -96,6 +96,7 @@ from iasim.domain.weather import (
 )
 from iasim.errors import PersistenceError
 from iasim.persistence.logs import SessionLogs
+from iasim.persistence.replay import write_replay
 from iasim.persistence.state import (
     SNAPSHOTS_DIRNAME,
     action_from_payload,
@@ -238,6 +239,9 @@ class GameSession:
         self._snapshot_dir = None if log_dir is None else Path(log_dir) / SNAPSHOTS_DIRNAME
         self._last_saved_tick: int | None = None
         self._last_saved_file: str | None = None
+        self._replay_turns: list[dict[str, Any]] = []
+        self._replay_start_hash: str | None = None
+        self._replay_start_tick = 0
         self._logged_corpse_ids: set[str] = set()
         self._mind_reports: dict[AgentId, MindReport] = {}
         self._mind_tick: dict[AgentId, int] = {}
@@ -1541,6 +1545,7 @@ class GameSession:
                     state_hash=self._final_state_hash,
                 )
                 self._write_session_metadata_locked()
+                self._write_replay_locked()
                 self._condition.notify_all()
             summary = self._summary_locked()
             if summary is None:
@@ -1611,8 +1616,18 @@ class GameSession:
             self._last_saved_tick = self._state.tick
             self._last_saved_file = str(saved.name)
             self._write_session_metadata_locked()
+            self._write_replay_locked()
             self._log_event_locked("session_saved", path=str(saved.name))
             return saved
+
+    def submit_replay_action(self, action: Action) -> dict[str, Any]:
+        """Submit one recorded action while replaying a saved session."""
+        return self._submit(str(action.agent_id), action)
+
+    def resolve_turn_by_deadline(self) -> None:
+        """Resolve the pending turn as if its action deadline expired."""
+        with self._condition:
+            self._resolve_deadline_locked()
 
     @classmethod
     def load(
@@ -1670,6 +1685,10 @@ class GameSession:
             AgentId(str(agent_id)): str(name)
             for agent_id, name in session_data.get("names", {}).items()
         }
+        for agent in state.agents:
+            session._names.setdefault(agent.agent_id, str(agent.agent_id))
+        session._replay_start_tick = state.tick
+        session._replay_start_hash = canonical_state_hash(state)
         session._joined_slots.clear()
         session._token_agents.clear()
         if tokens is not None:
@@ -1786,6 +1805,7 @@ class GameSession:
             return
 
         self._turn_deadline = None
+        self._capture_replay_start_locked()
         result = self._engine.resolve()
         self._state = self._engine.state
         self._record_result(result)
@@ -1839,7 +1859,7 @@ class GameSession:
 
         result = self._engine.resolve()
         self._state = self._engine.state
-        self._record_result(result)
+        self._record_result(result, resolved_by_deadline=True)
         self._update_phase_locked()
         self._maybe_snapshot_locked()
         self._condition.notify_all()
@@ -1952,14 +1972,23 @@ class GameSession:
             ],
         }
 
-    def _record_result(self, result: TurnResult) -> None:
+    def _record_result(
+        self,
+        result: TurnResult,
+        *,
+        resolved_by_deadline: bool = False,
+    ) -> None:
         recorded: dict[AgentId, dict[str, Any]] = {}
+        resolved_actions: list[dict[str, Any]] = []
         for event in result.events:
             self._record_social_event_locked(event)
             # The first event of an agent carries its primary action outcome;
             # later events are annotations such as a betrayal and never replace it.
             if event.agent_id in recorded:
                 continue
+            pending = self._pending_actions.get(event.agent_id)
+            if pending is not None:
+                resolved_actions.append(action_to_payload(pending))
             success = event.outcome in {
                 "moved",
                 "waited",
@@ -1991,8 +2020,51 @@ class GameSession:
                 event,
                 status="success" if success else "rejected",
             )
+        if self._log_dir is not None:
+            self._replay_turns.append(
+                {
+                    "tick": result.tick + 1,
+                    "state_hash": canonical_state_hash(self._state),
+                    "resolved_by": ("deadline" if resolved_by_deadline else "actions"),
+                    "actions": resolved_actions,
+                }
+            )
         self._last_results.update(recorded)
         self._pending_actions.clear()
+
+    def _capture_replay_start_locked(self) -> None:
+        """Record the state hash that the first replay turn starts from."""
+        if self._log_dir is None or self._replay_start_hash is not None:
+            return
+        self._replay_start_hash = canonical_state_hash(self._state)
+        self._replay_start_tick = self._state.tick
+
+    def _write_replay_locked(self) -> None:
+        """Write the replay record next to the session logs."""
+        if self._log_dir is None:
+            return
+        write_replay(
+            Path(self._log_dir),
+            {
+                "seed": self._state.seed,
+                "tick_minutes": self._state.tick_minutes,
+                "max_agents": self._max_agents,
+                "weather_min_ticks": self._weather_min_ticks,
+                "weather_max_ticks": self._weather_max_ticks,
+                "timeout_disconnects": self._timeout_disconnects,
+                "start_tick": self._replay_start_tick,
+                "start_hash": self._replay_start_hash,
+                "action_offset": 0,
+                "agents": [
+                    {"id": str(agent_id), "name": name}
+                    for agent_id, name in sorted(
+                        self._names.items(),
+                        key=lambda entry: str(entry[0]),
+                    )
+                ],
+                "turns": list(self._replay_turns),
+            },
+        )
 
     def _record_social_event_locked(self, event: TurnEvent) -> None:
         action = self._pending_actions.get(event.agent_id)

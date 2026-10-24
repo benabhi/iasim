@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 from iasim import __version__
+from iasim.app.replay import replay_saved_run
 from iasim.app.session import GameSession
 from iasim.config import ConfigError, IasimConfig, load_config
 from iasim.domain.usage import ModelPricing
@@ -133,7 +134,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.load is not None:
         print(f"load requested: {args.load}")
     if args.replay is not None:
-        print(f"replay requested: {args.replay}")
+        report = replay_saved_run(args.replay)
+        status = "match" if report.matched else "divergence"
+        print(
+            f"replay {status}: {report.ticks_replayed} ticks, "
+            f"{report.actions_replayed} actions, offset {report.action_offset}"
+        )
+        if not report.matched:
+            print(f"replay detail: {report.detail}", file=sys.stderr)
+            return int(ExitCode.PERSISTENCE)
+        return int(ExitCode.SUCCESS)
 
     if args.command == "serve":
         if not (args.headless or config.game.headless):
