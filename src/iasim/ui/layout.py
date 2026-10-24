@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from iasim.domain.agents import Agent, AgentStatus
 from iasim.domain.alliances import Alliance, AllianceStatus
@@ -475,6 +476,192 @@ def _render_sheet_footer(canvas: _Canvas, ascii_mode: bool) -> None:
     footer = (
         f"[TAB] Siguiente agente {separator} [1-8] Seleccionar {separator} "
         f"[ESC] Volver al panel {separator} [F2] Cerrar ficha"
+    )
+    text = (footer + " " * SCREEN_WIDTH)[:SCREEN_WIDTH]
+    canvas.fill(0, BOTTOM_BAR_Y, SCREEN_WIDTH, 1, fg=theme.BAR_FG, bg=theme.BAR_BG)
+    canvas.put(0, BOTTOM_BAR_Y, text, fg=theme.BAR_FG, bg=theme.BAR_BG, bold=True)
+
+
+def render_world_screen(
+    state: SessionState,
+    names: Mapping[AgentId, str],
+    *,
+    selected_agent_id: AgentId | None = None,
+    events: Sequence[str] = (),
+    paused: bool = False,
+    capacity: int = 8,
+    mind_reports: Mapping[AgentId, MindReport] | None = None,
+    last_results: Mapping[AgentId, Mapping[str, Any]] | None = None,
+    ascii_mode: bool = False,
+) -> BaseScreen:
+    """Render the full-screen F3 world summary with the all-agent table."""
+    canvas = _Canvas()
+    canvas.fill(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, fg=theme.WHITE, bg=theme.BLACK)
+    clock = SimulationClock(state.tick_minutes)
+    clock.advance(state.tick)
+    weather = state.weather
+    status = "PAUSA" if paused else "EN CURSO"
+    canvas.put(
+        2,
+        0,
+        f"F3 · MUNDO · DÍA {clock.day} · {clock.hour:02d}:{clock.minute:02d} · "
+        f"{_PHASE_LABELS[clock.phase]} · {_WEATHER_LABELS[weather.kind]} · "
+        f"{weather.temperature_c:.0f} °C · VIENTO {weather.wind} · "
+        f"VIS {weather.visibility_factor:.2f} · {status}",
+        fg=theme.CYAN,
+        bold=True,
+    )
+    alive = sum(1 for agent in state.agents if agent.is_alive)
+    free = max(0, capacity - len(state.agents))
+    canvas.put(
+        2,
+        1,
+        f"AGENTES {len(state.agents)}/{capacity} · {alive} vivos · {free} libres · "
+        "Enter abre F2 · TAB cicla · ESC vuelve al panel",
+        fg=theme.DIM,
+    )
+
+    selected = _resolve_selected(state, selected_agent_id)
+    _draw_world_table(
+        canvas,
+        state,
+        names,
+        selected=selected,
+        mind_reports=mind_reports,
+        last_results=last_results,
+        ascii_mode=ascii_mode,
+    )
+    _draw_world_summary(canvas, state)
+    _draw_world_events(canvas, events, ascii_mode)
+    _render_world_footer(canvas, ascii_mode)
+    return canvas.to_screen()
+
+
+def _draw_world_table(
+    canvas: _Canvas,
+    state: SessionState,
+    names: Mapping[AgentId, str],
+    *,
+    selected: Agent | None,
+    mind_reports: Mapping[AgentId, MindReport] | None,
+    last_results: Mapping[AgentId, Mapping[str, Any]] | None,
+    ascii_mode: bool,
+) -> None:
+    y = 3
+    canvas.put(2, y, "AGENTES", fg=theme.CYAN, bold=True)
+    y += 1
+    canvas.put(2, y, _world_header_row(), fg=theme.DIM, bold=True)
+    y += 1
+    agents = list(state.agents)[:8]
+    if not agents:
+        canvas.put(2, y, "— sin agentes —", fg=theme.DIM)
+        return
+    for index, agent in enumerate(agents, start=1):
+        name = names.get(agent.agent_id, str(agent.agent_id))
+        report = None if mind_reports is None else mind_reports.get(agent.agent_id)
+        intent = "—" if report is None else report.intent
+        result = None if last_results is None else last_results.get(agent.agent_id)
+        last_action = "—"
+        if result is not None:
+            action = result.get("action")
+            outcome = result.get("outcome")
+            last_action = f"{action}/{outcome}" if outcome else str(action)
+        is_selected = selected is not None and agent.agent_id == selected.agent_id
+        canvas.put(
+            2,
+            y,
+            _world_table_row(
+                index,
+                agent,
+                name,
+                intent=intent,
+                last_action=last_action,
+                selected=is_selected,
+                ascii_mode=ascii_mode,
+            ),
+            fg=theme.WHITE,
+            bg=theme.SELECTED_BG if is_selected else theme.BLACK,
+            bold=is_selected,
+        )
+        y += 1
+
+
+def _world_header_row() -> str:
+    return (
+        f"{'#':>3} {'AGENTE':<16} {'POS':<9} {'SAL':>6} {'HAM':>7} "
+        f"{'SED':>7} {'ENE':>8} {'TEMP':>8} {'ESTADO':<12} "
+        f"{'INTENCIÓN':<28} ÚLTIMA ACCIÓN"
+    )
+
+
+def _world_table_row(
+    index: int,
+    agent: Agent,
+    name: str,
+    *,
+    intent: str,
+    last_action: str,
+    selected: bool,
+    ascii_mode: bool,
+) -> str:
+    marker = ">" if ascii_mode else "▶"
+    prefix = marker if selected else " "
+    position = f"({agent.position.x},{agent.position.y})"
+    if agent.status is AgentStatus.DEAD:
+        state_label = "MUERTO"
+        health = hunger = thirst = energy = temperature = "—"
+    else:
+        attributes = agent.attributes
+        state_label = _agent_state_label(agent)
+        health = f"{attributes.health:.0f}"
+        hunger = f"{attributes.hunger:.0f}"
+        thirst = f"{attributes.thirst:.0f}"
+        energy = f"{attributes.energy:.0f}"
+        temperature = f"{attributes.body_temperature_c:.1f}"
+    return (
+        f"{prefix}{index:>2} {name:<16.16} {position:<9} "
+        f"{health:>6} {hunger:>7} {thirst:>7} {energy:>8} {temperature:>8} "
+        f"{state_label:<12} {_clip(intent, 28):<28} {_clip(last_action, 22)}"
+    )
+
+
+def _draw_world_summary(canvas: _Canvas, state: SessionState) -> None:
+    y = 5 + len(state.agents[:8])
+    fires = sum(1 for structure in state.structures if structure.kind is StructureKind.FIRE)
+    shelters = sum(1 for structure in state.structures if structure.kind is StructureKind.SHELTER)
+    corpses = sum(1 for agent in state.agents if not agent.is_alive)
+    trees = sum(1 for tile in state.world.tiles if tile is TileType.TREE)
+    bushes = sum(1 for tile in state.world.tiles if tile is TileType.BUSH)
+    offers = sum(1 for trade in state.trades if trade.status is TradeStatus.OPEN)
+    canvas.put(2, y + 1, "MUNDO", fg=theme.CYAN, bold=True)
+    canvas.put(
+        2,
+        y + 2,
+        f"Fuegos: {fires} · Refugios: {shelters} · Cadáveres: {corpses} · "
+        f"Árboles: {trees} · Arbustos: {bushes} · Ofertas activas: {offers}",
+        fg=theme.WHITE,
+    )
+
+
+def _draw_world_events(
+    canvas: _Canvas,
+    events: Sequence[str],
+    ascii_mode: bool,
+) -> None:
+    y = BOTTOM_BAR_Y - 7
+    separator = (theme.ASCII_HORIZONTAL if ascii_mode else "─") * (SCREEN_WIDTH - 4)
+    canvas.put(2, y, separator, fg=theme.DIM)
+    canvas.put(2, y + 1, "EVENTOS RECIENTES", fg=theme.CYAN, bold=True)
+    lines = list(events)[-4:] if events else ["— sin eventos —"]
+    for offset, line in enumerate(lines, start=2):
+        canvas.put(2, y + offset, _clip(line, SCREEN_WIDTH - 6), fg=theme.WHITE)
+
+
+def _render_world_footer(canvas: _Canvas, ascii_mode: bool) -> None:
+    separator = theme.ASCII_VERTICAL if ascii_mode else "│"
+    footer = (
+        f"[Enter] Ver ficha F2 {separator} [TAB] Siguiente agente {separator} "
+        f"[1-8] Seleccionar {separator} [ESC] Volver {separator} [F3] Cerrar mundo"
     )
     text = (footer + " " * SCREEN_WIDTH)[:SCREEN_WIDTH]
     canvas.fill(0, BOTTOM_BAR_Y, SCREEN_WIDTH, 1, fg=theme.BAR_FG, bg=theme.BAR_BG)

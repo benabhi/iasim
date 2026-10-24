@@ -102,6 +102,16 @@ class UiControlTests(unittest.TestCase):
         opened = handle_key(UiState(), "f2", AGENTS)
         self.assertEqual(handle_key(opened, "esc", AGENTS).view, UiView.NONE)
 
+    def test_f3_opens_the_world_summary_and_enter_opens_the_sheet(self) -> None:
+        state = handle_key(UiState(), "f3", AGENTS)
+        self.assertEqual(state.view, UiView.WORLD_SUMMARY)
+        self.assertEqual(handle_key(state, "f3", AGENTS).view, UiView.NONE)
+
+        opened = handle_key(UiState(), "f3", AGENTS)
+        state = handle_key(opened, "enter", AGENTS)
+        self.assertEqual(state.view, UiView.AGENT_SHEET)
+        self.assertEqual(handle_key(state, "esc", AGENTS).view, UiView.NONE)
+
     def test_tab_cycles_agents_without_closing_the_sheet(self) -> None:
         state = handle_key(UiState(), "f2", AGENTS)
         state = handle_key(state, "2", AGENTS)

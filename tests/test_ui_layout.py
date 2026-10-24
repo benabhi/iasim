@@ -25,6 +25,7 @@ from iasim.ui.layout import (
     render_agent_screen,
     render_base_screen,
     render_help_screen,
+    render_world_screen,
 )
 from iasim.ui.panel import PanelState, RightPanelTab
 from iasim.world.generation import generate_layout
@@ -844,6 +845,132 @@ class AgentSheetTests(unittest.TestCase):
         screen = render_agent_screen(empty, {})
 
         self.assertIn("sin agente seleccionado", screen.to_text())
+
+
+class WorldSummaryTests(unittest.TestCase):
+    def _state(self) -> SessionState:
+        tiles = [TileType.GRASS] * 64
+        tiles[1 * 8 + 1] = TileType.FIRE
+        tiles[1 * 8 + 2] = TileType.SHELTER
+        tiles[3 * 8 + 3] = TileType.TREE
+        tiles[4 * 8 + 4] = TileType.BUSH
+        dead = Agent(
+            AgentId("ag_03"),
+            Position(7, 7),
+            attributes=AgentAttributes(health_centi=0),
+            status=AgentStatus.DEAD,
+        )
+        return SessionState(
+            seed=2,
+            tick=0,
+            rng_state=2,
+            world=WorldMap(width=8, height=8, tiles=tuple(tiles)),
+            weather=WeatherState(kind=WeatherKind.RAIN, remaining_ticks=5, wind=4),
+            agents=(
+                Agent(AgentId("ag_01"), Position(0, 0)),
+                Agent(AgentId("ag_02"), Position(5, 5)),
+                dead,
+            ),
+            structures=(
+                Structure(StructureKind.FIRE, Position(1, 1)),
+                Structure(StructureKind.SHELTER, Position(2, 1)),
+            ),
+            trades=(
+                TradeOffer.propose(
+                    AgentId("ag_01"),
+                    AgentId("ag_02"),
+                    0,
+                    ((ItemId("wood"), 1),),
+                    ((ItemId("berry"), 1),),
+                ),
+            ),
+        )
+
+    def test_the_world_screen_shows_climate_agents_and_summary(self) -> None:
+        reports = {
+            AgentId("ag_01"): MindReport(
+                agent_id=AgentId("ag_01"),
+                tick=0,
+                intent="Buscar agua",
+                thought="Sed",
+            )
+        }
+        results = {
+            AgentId("ag_01"): {"action": "move", "outcome": "moved"},
+        }
+        screen = render_world_screen(
+            self._state(),
+            NAMES,
+            selected_agent_id=AgentId("ag_01"),
+            events=["evento uno", "evento dos"],
+            mind_reports=reports,
+            last_results=results,
+            paused=True,
+        )
+        text = screen.to_text()
+
+        self.assertEqual((screen.width, screen.height), (160, 45))
+        self.assertTrue(all(len(screen.row_text(y)) == 160 for y in range(45)))
+        for expected in (
+            "F3 · MUNDO",
+            "DÍA 1",
+            "LLUVIA",
+            "VIENTO 4",
+            "VIS",
+            "PAUSA",
+            "AGENTES 3/8",
+            "AGENTE",
+            "POS",
+            "SAL",
+            "HAM",
+            "SED",
+            "ENE",
+            "TEMP",
+            "ESTADO",
+            "INTENCIÓN",
+            "ÚLTIMA ACCIÓN",
+            "Nia",
+            "Kai",
+            "Luma",
+            "MUERTO",
+            "Buscar agua",
+            "move/moved",
+            "MUNDO",
+            "Fuegos: 1",
+            "Refugios: 1",
+            "Cadáveres: 1",
+            "Árboles: 1",
+            "Arbustos: 1",
+            "Ofertas activas: 1",
+            "EVENTOS RECIENTES",
+            "evento dos",
+            "[Enter] Ver ficha F2",
+        ):
+            self.assertIn(expected, text)
+
+    def test_the_table_marks_the_selected_agent(self) -> None:
+        screen = render_world_screen(
+            self._state(),
+            NAMES,
+            selected_agent_id=AgentId("ag_02"),
+        )
+
+        selected_row = next(
+            row for row in screen.to_text().splitlines() if "Kai" in row and "ag_02" not in row
+        )
+        self.assertIn("▶", selected_row)
+
+    def test_the_world_screen_handles_an_empty_world(self) -> None:
+        empty = SessionState(
+            seed=1,
+            tick=0,
+            rng_state=1,
+            world=WorldMap(width=4, height=4, tiles=(TileType.GRASS,) * 16),
+        )
+
+        screen = render_world_screen(empty, {})
+
+        self.assertIn("sin agentes", screen.to_text())
 
 
 if __name__ == "__main__":
