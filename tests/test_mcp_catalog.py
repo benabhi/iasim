@@ -125,6 +125,21 @@ class ToolSchemaTests(unittest.TestCase):
         self.assertIn("iasim_observe", tools)
         self.assertIn("iasim_get_session_info", tools)
 
+    def test_primary_actions_accept_a_request_id(self) -> None:
+        tools = asyncio.run(_tools(GameSession(42, layout=_layout())))
+
+        for name in ("iasim_move", "iasim_wait", "iasim_attack", "iasim_offer_trade"):
+            with self.subTest(tool=name):
+                schema = tools[name].input_schema
+                request_id = schema["properties"]["request_id"]
+                if "anyOf" in request_id:
+                    request_id = next(
+                        option for option in request_id["anyOf"] if option.get("type") == "string"
+                    )
+                self.assertEqual(request_id["minLength"], 1)
+                self.assertEqual(request_id["maxLength"], 64)
+                self.assertNotIn("request_id", schema.get("required", []))
+
     def test_server_advertises_the_protocol_version(self) -> None:
         server = create_server(GameSession(42, layout=_layout()))
 

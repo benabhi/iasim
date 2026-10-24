@@ -17,6 +17,14 @@ TimeoutMillis = Annotated[
     int,
     Field(ge=0, le=60_000, description="Maximum wait in milliseconds."),
 ]
+RequestId = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=64,
+        description="Idempotency key; repeating it replays the first response.",
+    ),
+]
 
 
 class TradeItem(BaseModel):

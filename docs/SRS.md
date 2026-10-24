@@ -1245,7 +1245,7 @@ Todas las acciones principales aceptan `tick`, `request_id?` y `reason?` (≤ 28
 - El costo reportado por el agente tiene prioridad; si falta, se estima con `[usage.pricing]`; si tampoco hay precio, queda como desconocido.
 - Toda acción devuelve `queued`; el resultado final aparece en la observación siguiente como `action_result`.
 - Las acciones se validan al encolar y se revalidan al resolver; una acción puede fallar si el mundo cambió.
-- `request_id` es idempotente durante la sesión: repetir la misma llamada no duplica la acción.
+- `request_id` es idempotente durante la sesión: repetir la misma llamada devuelve la primera respuesta sin duplicar la acción; reutilizarlo para otra acción devuelve `REQUEST_ID_CONFLICT`.
 - Los `offer`/`request` de intercambio son listas de `{item_id, qty}`.
 - `sleep` suspende la obligación de actuar; el agente recibe observaciones y puede ser despertado por daño o peligro.
 - No hay tools de administración, teletransporte, edición de mapa ni lectura del mapa completo.
@@ -1387,6 +1387,8 @@ Las tools devuelven un resultado estructurado. Los errores de validación se dev
 | `STALE_TICK` | La acción corresponde a un tick ya resuelto. |
 | `ALREADY_ACTED` | Ya se envió una acción principal en este tick. |
 | `INVALID_TICK` | Tick inexistente o futuro. |
+| `INVALID_REQUEST_ID` | `request_id` vacío o de más de 64 caracteres. |
+| `REQUEST_ID_CONFLICT` | `request_id` ya usado para una acción distinta. |
 | `AGENT_DEAD` | El agente está muerto. |
 | `AGENT_ABSENT` | El agente conectado está ausente por timeouts; no puede actuar hasta volver a responder. |
 | `TICK_IN_PROGRESS` | El tick actual ya tiene acciones pendientes; el agente debe reintentar la conexión en el siguiente tick. |

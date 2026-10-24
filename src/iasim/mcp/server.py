@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import socket
+from collections.abc import Callable
 from typing import Any
 
 from mcp.server import MCPServer
@@ -18,9 +19,10 @@ from iasim.app.session import SCHEMA_VERSION, GameSession
 from iasim.config import is_loopback_host
 from iasim.domain.identifiers import AgentId
 from iasim.domain.items import EquipSlot
+from iasim.mcp.idempotency import MAX_REQUEST_ID_LENGTH, RequestCache, RequestSignature
 from iasim.mcp.limits import MAX_TEXT_FIELD_LENGTH, LimitKind, RateLimiter
 from iasim.mcp.protocol import PROTOCOL_VERSION
-from iasim.mcp.schemas import PositiveQuantity, Tick, TimeoutMillis, TradeItem
+from iasim.mcp.schemas import PositiveQuantity, RequestId, Tick, TimeoutMillis, TradeItem
 
 DEFAULT_RESOURCE_URL = "http://127.0.0.1:8765/mcp"
 DEFAULT_ISSUER_URL = "http://127.0.0.1:8765"
@@ -93,6 +95,24 @@ def create_server(
 ) -> MCPServer[Any]:
     """Create the authenticated MCP server with the full MVP tool catalog."""
     limiter = RateLimiter()
+    requests = RequestCache()
+
+    def action(
+        request_id: str | None,
+        signature: RequestSignature,
+        run: Callable[[AgentId], dict[str, Any]],
+        *text: str | None,
+    ) -> dict[str, Any]:
+        return _action_request(
+            session,
+            limiter,
+            requests,
+            request_id,
+            signature,
+            run,
+            text=text,
+        )
+
     server: MCPServer[Any] = MCPServer(
         "IASim",
         version=PROTOCOL_VERSION,
@@ -176,46 +196,64 @@ def create_server(
         return session.inspect(agent_id, target_id, x, y)
 
     @server.tool()
-    def iasim_move(tick: Tick, dx: int, dy: int) -> dict[str, Any]:
+    def iasim_move(
+        tick: Tick,
+        dx: int,
+        dy: int,
+        request_id: RequestId | None = None,
+    ) -> dict[str, Any]:
         """Queue a one-cell move in one of eight directions."""
-        agent_id = _guard(session, limiter, LimitKind.ACTION)
-        if isinstance(agent_id, dict):
-            return agent_id
-        return session.move(agent_id, tick, dx, dy)
+        return action(
+            request_id,
+            ("move", tick, dx, dy),
+            lambda agent_id: session.move(agent_id, tick, dx, dy),
+        )
 
     @server.tool()
-    def iasim_move_to(tick: Tick, x: int, y: int) -> dict[str, Any]:
+    def iasim_move_to(
+        tick: Tick,
+        x: int,
+        y: int,
+        request_id: RequestId | None = None,
+    ) -> dict[str, Any]:
         """Advance one step along a deterministic route to the target."""
-        agent_id = _guard(session, limiter, LimitKind.ACTION)
-        if isinstance(agent_id, dict):
-            return agent_id
-        return session.move_to(agent_id, tick, x, y)
+        return action(
+            request_id,
+            ("move_to", tick, x, y),
+            lambda agent_id: session.move_to(agent_id, tick, x, y),
+        )
 
     @server.tool()
-    def iasim_wait(tick: Tick) -> dict[str, Any]:
+    def iasim_wait(tick: Tick, request_id: RequestId | None = None) -> dict[str, Any]:
         """Queue a wait action for the current tick."""
-        agent_id = _guard(session, limiter, LimitKind.ACTION)
-        if isinstance(agent_id, dict):
-            return agent_id
-        return session.wait(agent_id, tick)
+        return action(
+            request_id,
+            ("wait", tick),
+            lambda agent_id: session.wait(agent_id, tick),
+        )
 
     @server.tool()
-    def iasim_rest(tick: Tick) -> dict[str, Any]:
+    def iasim_rest(tick: Tick, request_id: RequestId | None = None) -> dict[str, Any]:
         """Rest for one tick and recover energy."""
-        agent_id = _guard(session, limiter, LimitKind.ACTION)
-        if isinstance(agent_id, dict):
-            return agent_id
-        return session.rest(agent_id, tick)
+        return action(
+            request_id,
+            ("rest", tick),
+            lambda agent_id: session.rest(agent_id, tick),
+        )
 
     @server.tool()
-    def iasim_sleep(tick: Tick, until: str | None = None) -> dict[str, Any]:
+    def iasim_sleep(
+        tick: Tick,
+        until: str | None = None,
+        request_id: RequestId | None = None,
+    ) -> dict[str, Any]:
         """Sleep until energy_full, dawn, or hours:N."""
-        agent_id = _guard(session, limiter, LimitKind.ACTION)
-        if isinstance(agent_id, dict):
-            return agent_id
-        if _text_too_long(until):
-            return _message_too_long(session)
-        return session.sleep(agent_id, tick, until)
+        return action(
+            request_id,
+            ("sleep", tick, until),
+            lambda agent_id: session.sleep(agent_id, tick, until),
+            until,
+        )
 
     @server.tool()
     def iasim_gather(
@@ -223,14 +261,15 @@ def create_server(
         x: int,
         y: int,
         node_id: str | None = None,
+        request_id: RequestId | None = None,
     ) -> dict[str, Any]:
         """Gather a manual or tool-gated resource from an adjacent tile."""
-        agent_id = _guard(session, limiter, LimitKind.ACTION)
-        if isinstance(agent_id, dict):
-            return agent_id
-        if _text_too_long(node_id):
-            return _message_too_long(session)
-        return session.gather(agent_id, tick, x, y, node_id)
+        return action(
+            request_id,
+            ("gather", tick, x, y, node_id),
+            lambda agent_id: session.gather(agent_id, tick, x, y, node_id),
+            node_id,
+        )
 
     @server.tool()
     def iasim_pickup(
@@ -238,34 +277,44 @@ def create_server(
         x: int,
         y: int,
         item_id: str | None = None,
+        request_id: RequestId | None = None,
     ) -> dict[str, Any]:
         """Pick up a ground item from the current or an adjacent tile."""
-        agent_id = _guard(session, limiter, LimitKind.ACTION)
-        if isinstance(agent_id, dict):
-            return agent_id
-        if _text_too_long(item_id):
-            return _message_too_long(session)
-        return session.pickup(agent_id, tick, x, y, item_id)
+        return action(
+            request_id,
+            ("pickup", tick, x, y, item_id),
+            lambda agent_id: session.pickup(agent_id, tick, x, y, item_id),
+            item_id,
+        )
 
     @server.tool()
-    def iasim_drop(tick: Tick, item_id: str, qty: PositiveQuantity = 1) -> dict[str, Any]:
+    def iasim_drop(
+        tick: Tick,
+        item_id: str,
+        qty: PositiveQuantity = 1,
+        request_id: RequestId | None = None,
+    ) -> dict[str, Any]:
         """Drop one or more units of an inventory item."""
-        agent_id = _guard(session, limiter, LimitKind.ACTION)
-        if isinstance(agent_id, dict):
-            return agent_id
-        if _text_too_long(item_id):
-            return _message_too_long(session)
-        return session.drop(agent_id, tick, item_id, qty)
+        return action(
+            request_id,
+            ("drop", tick, item_id, qty),
+            lambda agent_id: session.drop(agent_id, tick, item_id, qty),
+            item_id,
+        )
 
     @server.tool()
-    def iasim_eat(tick: Tick, item_id: str) -> dict[str, Any]:
+    def iasim_eat(
+        tick: Tick,
+        item_id: str,
+        request_id: RequestId | None = None,
+    ) -> dict[str, Any]:
         """Eat one unit of food from the inventory."""
-        agent_id = _guard(session, limiter, LimitKind.ACTION)
-        if isinstance(agent_id, dict):
-            return agent_id
-        if _text_too_long(item_id):
-            return _message_too_long(session)
-        return session.eat(agent_id, tick, item_id)
+        return action(
+            request_id,
+            ("eat", tick, item_id),
+            lambda agent_id: session.eat(agent_id, tick, item_id),
+            item_id,
+        )
 
     @server.tool()
     def iasim_drink(
@@ -273,62 +322,84 @@ def create_server(
         x: int | None = None,
         y: int | None = None,
         item_id: str | None = None,
+        request_id: RequestId | None = None,
     ) -> dict[str, Any]:
         """Drink from an adjacent fresh-water tile or from a waterskin."""
-        agent_id = _guard(session, limiter, LimitKind.ACTION)
-        if isinstance(agent_id, dict):
-            return agent_id
-        if _text_too_long(item_id):
-            return _message_too_long(session)
-        return session.drink(agent_id, tick, x=x, y=y, item_id=item_id)
+        return action(
+            request_id,
+            ("drink", tick, x, y, item_id),
+            lambda agent_id: session.drink(agent_id, tick, x=x, y=y, item_id=item_id),
+            item_id,
+        )
 
     @server.tool()
-    def iasim_use(tick: Tick, item_id: str) -> dict[str, Any]:
+    def iasim_use(
+        tick: Tick,
+        item_id: str,
+        request_id: RequestId | None = None,
+    ) -> dict[str, Any]:
         """Use a consumable such as a bandage from the inventory."""
-        agent_id = _guard(session, limiter, LimitKind.ACTION)
-        if isinstance(agent_id, dict):
-            return agent_id
-        if _text_too_long(item_id):
-            return _message_too_long(session)
-        return session.use_item(agent_id, tick, item_id)
+        return action(
+            request_id,
+            ("use", tick, item_id),
+            lambda agent_id: session.use_item(agent_id, tick, item_id),
+            item_id,
+        )
 
     @server.tool()
-    def iasim_equip(tick: Tick, item_id: str) -> dict[str, Any]:
+    def iasim_equip(
+        tick: Tick,
+        item_id: str,
+        request_id: RequestId | None = None,
+    ) -> dict[str, Any]:
         """Equip one inventory item into the slot declared by the catalog."""
-        agent_id = _guard(session, limiter, LimitKind.ACTION)
-        if isinstance(agent_id, dict):
-            return agent_id
-        if _text_too_long(item_id):
-            return _message_too_long(session)
-        return session.equip(agent_id, tick, item_id)
+        return action(
+            request_id,
+            ("equip", tick, item_id),
+            lambda agent_id: session.equip(agent_id, tick, item_id),
+            item_id,
+        )
 
     @server.tool()
-    def iasim_unequip(tick: Tick, slot: EquipSlot) -> dict[str, Any]:
+    def iasim_unequip(
+        tick: Tick,
+        slot: EquipSlot,
+        request_id: RequestId | None = None,
+    ) -> dict[str, Any]:
         """Move one equipped item back into the inventory."""
-        agent_id = _guard(session, limiter, LimitKind.ACTION)
-        if isinstance(agent_id, dict):
-            return agent_id
-        return session.unequip(agent_id, tick, slot.value)
+        return action(
+            request_id,
+            ("unequip", tick, slot.value),
+            lambda agent_id: session.unequip(agent_id, tick, slot.value),
+        )
 
     @server.tool()
-    def iasim_fill(tick: Tick, item_id: str) -> dict[str, Any]:
+    def iasim_fill(
+        tick: Tick,
+        item_id: str,
+        request_id: RequestId | None = None,
+    ) -> dict[str, Any]:
         """Fill a waterskin from adjacent fresh water."""
-        agent_id = _guard(session, limiter, LimitKind.ACTION)
-        if isinstance(agent_id, dict):
-            return agent_id
-        if _text_too_long(item_id):
-            return _message_too_long(session)
-        return session.fill(agent_id, tick, item_id)
+        return action(
+            request_id,
+            ("fill", tick, item_id),
+            lambda agent_id: session.fill(agent_id, tick, item_id),
+            item_id,
+        )
 
     @server.tool()
-    def iasim_craft(tick: Tick, recipe_id: str) -> dict[str, Any]:
+    def iasim_craft(
+        tick: Tick,
+        recipe_id: str,
+        request_id: RequestId | None = None,
+    ) -> dict[str, Any]:
         """Craft one recipe when ingredients and station requirements are met."""
-        agent_id = _guard(session, limiter, LimitKind.ACTION)
-        if isinstance(agent_id, dict):
-            return agent_id
-        if _text_too_long(recipe_id):
-            return _message_too_long(session)
-        return session.craft(agent_id, tick, recipe_id)
+        return action(
+            request_id,
+            ("craft", tick, recipe_id),
+            lambda agent_id: session.craft(agent_id, tick, recipe_id),
+            recipe_id,
+        )
 
     @server.tool()
     def iasim_build(
@@ -336,14 +407,15 @@ def create_server(
         structure_id: str,
         x: int,
         y: int,
+        request_id: RequestId | None = None,
     ) -> dict[str, Any]:
         """Build a fire, workbench, or shelter on an adjacent tile."""
-        agent_id = _guard(session, limiter, LimitKind.ACTION)
-        if isinstance(agent_id, dict):
-            return agent_id
-        if _text_too_long(structure_id):
-            return _message_too_long(session)
-        return session.build(agent_id, tick, structure_id, x, y)
+        return action(
+            request_id,
+            ("build", tick, structure_id, x, y),
+            lambda agent_id: session.build(agent_id, tick, structure_id, x, y),
+            structure_id,
+        )
 
     @server.tool()
     def iasim_say(message: str, target_id: str | None = None) -> dict[str, Any]:
@@ -356,74 +428,104 @@ def create_server(
         return session.say(agent_id, message, target_id)
 
     @server.tool()
-    def iasim_attack(tick: Tick, target_id: str) -> dict[str, Any]:
+    def iasim_attack(
+        tick: Tick,
+        target_id: str,
+        request_id: RequestId | None = None,
+    ) -> dict[str, Any]:
         """Attack an adjacent living agent with the equipped weapon."""
-        agent_id = _guard(session, limiter, LimitKind.ACTION)
-        if isinstance(agent_id, dict):
-            return agent_id
-        if _text_too_long(target_id):
-            return _message_too_long(session)
-        return session.attack(agent_id, tick, target_id)
+        return action(
+            request_id,
+            ("attack", tick, target_id),
+            lambda agent_id: session.attack(agent_id, tick, target_id),
+            target_id,
+        )
 
     @server.tool()
-    def iasim_throw(tick: Tick, item_id: str, target_id: str) -> dict[str, Any]:
+    def iasim_throw(
+        tick: Tick,
+        item_id: str,
+        target_id: str,
+        request_id: RequestId | None = None,
+    ) -> dict[str, Any]:
         """Throw a stone at a visible target up to four tiles away."""
-        agent_id = _guard(session, limiter, LimitKind.ACTION)
-        if isinstance(agent_id, dict):
-            return agent_id
-        if _text_too_long(item_id, target_id):
-            return _message_too_long(session)
-        return session.throw(agent_id, tick, item_id, target_id)
+        return action(
+            request_id,
+            ("throw", tick, item_id, target_id),
+            lambda agent_id: session.throw(agent_id, tick, item_id, target_id),
+            item_id,
+            target_id,
+        )
 
     @server.tool()
-    def iasim_flee(tick: Tick, target_id: str) -> dict[str, Any]:
+    def iasim_flee(
+        tick: Tick,
+        target_id: str,
+        request_id: RequestId | None = None,
+    ) -> dict[str, Any]:
         """Flee up to two cells away from a living target."""
-        agent_id = _guard(session, limiter, LimitKind.ACTION)
-        if isinstance(agent_id, dict):
-            return agent_id
-        if _text_too_long(target_id):
-            return _message_too_long(session)
-        return session.flee(agent_id, tick, target_id)
+        return action(
+            request_id,
+            ("flee", tick, target_id),
+            lambda agent_id: session.flee(agent_id, tick, target_id),
+            target_id,
+        )
 
     @server.tool()
-    def iasim_loot(tick: Tick, corpse_id: str) -> dict[str, Any]:
+    def iasim_loot(
+        tick: Tick,
+        corpse_id: str,
+        request_id: RequestId | None = None,
+    ) -> dict[str, Any]:
         """Loot all remaining items from an adjacent corpse."""
-        agent_id = _guard(session, limiter, LimitKind.ACTION)
-        if isinstance(agent_id, dict):
-            return agent_id
-        if _text_too_long(corpse_id):
-            return _message_too_long(session)
-        return session.loot(agent_id, tick, corpse_id)
+        return action(
+            request_id,
+            ("loot", tick, corpse_id),
+            lambda agent_id: session.loot(agent_id, tick, corpse_id),
+            corpse_id,
+        )
 
     @server.tool()
-    def iasim_offer_alliance(tick: Tick, target_id: str) -> dict[str, Any]:
+    def iasim_offer_alliance(
+        tick: Tick,
+        target_id: str,
+        request_id: RequestId | None = None,
+    ) -> dict[str, Any]:
         """Offer an alliance to a nearby living agent."""
-        agent_id = _guard(session, limiter, LimitKind.ACTION)
-        if isinstance(agent_id, dict):
-            return agent_id
-        if _text_too_long(target_id):
-            return _message_too_long(session)
-        return session.offer_alliance(agent_id, tick, target_id)
+        return action(
+            request_id,
+            ("offer_alliance", tick, target_id),
+            lambda agent_id: session.offer_alliance(agent_id, tick, target_id),
+            target_id,
+        )
 
     @server.tool()
-    def iasim_accept_alliance(tick: Tick, alliance_id: str) -> dict[str, Any]:
+    def iasim_accept_alliance(
+        tick: Tick,
+        alliance_id: str,
+        request_id: RequestId | None = None,
+    ) -> dict[str, Any]:
         """Accept a pending alliance offer addressed to the agent."""
-        agent_id = _guard(session, limiter, LimitKind.ACTION)
-        if isinstance(agent_id, dict):
-            return agent_id
-        if _text_too_long(alliance_id):
-            return _message_too_long(session)
-        return session.accept_alliance(agent_id, tick, alliance_id)
+        return action(
+            request_id,
+            ("accept_alliance", tick, alliance_id),
+            lambda agent_id: session.accept_alliance(agent_id, tick, alliance_id),
+            alliance_id,
+        )
 
     @server.tool()
-    def iasim_break_alliance(tick: Tick, target_id: str) -> dict[str, Any]:
+    def iasim_break_alliance(
+        tick: Tick,
+        target_id: str,
+        request_id: RequestId | None = None,
+    ) -> dict[str, Any]:
         """Break an alliance, or close a pending offer."""
-        agent_id = _guard(session, limiter, LimitKind.ACTION)
-        if isinstance(agent_id, dict):
-            return agent_id
-        if _text_too_long(target_id):
-            return _message_too_long(session)
-        return session.break_alliance(agent_id, tick, target_id)
+        return action(
+            request_id,
+            ("break_alliance", tick, target_id),
+            lambda agent_id: session.break_alliance(agent_id, tick, target_id),
+            target_id,
+        )
 
     @server.tool()
     def iasim_offer_trade(
@@ -431,44 +533,55 @@ def create_server(
         target_id: str,
         offer: list[TradeItem],
         request: list[TradeItem],
+        request_id: RequestId | None = None,
     ) -> dict[str, Any]:
         """Offer an item trade to a nearby living agent.
 
         Each lot is a list of ``{"item_id": str, "qty": int}`` entries with no
         extra keys; both lots must be non-empty.
         """
-        agent_id = _guard(session, limiter, LimitKind.ACTION)
-        if isinstance(agent_id, dict):
-            return agent_id
-        if _text_too_long(target_id):
-            return _message_too_long(session)
-        return session.offer_trade(
-            agent_id,
-            tick,
+        offer_lot = [(entry.item_id, entry.qty) for entry in offer]
+        request_lot = [(entry.item_id, entry.qty) for entry in request]
+        return action(
+            request_id,
+            ("offer_trade", tick, target_id, tuple(offer_lot), tuple(request_lot)),
+            lambda agent_id: session.offer_trade(
+                agent_id,
+                tick,
+                target_id,
+                [entry.model_dump() for entry in offer],
+                [entry.model_dump() for entry in request],
+            ),
             target_id,
-            [entry.model_dump() for entry in offer],
-            [entry.model_dump() for entry in request],
         )
 
     @server.tool()
-    def iasim_accept_trade(tick: Tick, trade_id: str) -> dict[str, Any]:
+    def iasim_accept_trade(
+        tick: Tick,
+        trade_id: str,
+        request_id: RequestId | None = None,
+    ) -> dict[str, Any]:
         """Accept an open trade offer and swap the items atomically."""
-        agent_id = _guard(session, limiter, LimitKind.ACTION)
-        if isinstance(agent_id, dict):
-            return agent_id
-        if _text_too_long(trade_id):
-            return _message_too_long(session)
-        return session.accept_trade(agent_id, tick, trade_id)
+        return action(
+            request_id,
+            ("accept_trade", tick, trade_id),
+            lambda agent_id: session.accept_trade(agent_id, tick, trade_id),
+            trade_id,
+        )
 
     @server.tool()
-    def iasim_decline_trade(tick: Tick, trade_id: str) -> dict[str, Any]:
+    def iasim_decline_trade(
+        tick: Tick,
+        trade_id: str,
+        request_id: RequestId | None = None,
+    ) -> dict[str, Any]:
         """Decline an open trade offer."""
-        agent_id = _guard(session, limiter, LimitKind.ACTION)
-        if isinstance(agent_id, dict):
-            return agent_id
-        if _text_too_long(trade_id):
-            return _message_too_long(session)
-        return session.decline_trade(agent_id, tick, trade_id)
+        return action(
+            request_id,
+            ("decline_trade", tick, trade_id),
+            lambda agent_id: session.decline_trade(agent_id, tick, trade_id),
+            trade_id,
+        )
 
     @server.tool()
     def iasim_report_mind(
@@ -553,6 +666,40 @@ def _guard(
     return agent_id
 
 
+def _action_request(
+    session: GameSession,
+    limiter: RateLimiter,
+    requests: RequestCache,
+    request_id: str | None,
+    signature: RequestSignature,
+    run: Callable[[AgentId], dict[str, Any]],
+    *,
+    text: tuple[str | None, ...] = (),
+) -> dict[str, Any]:
+    """Run one primary action, replaying a repeated request id."""
+    agent_id = _guard(session, limiter, LimitKind.ACTION)
+    if isinstance(agent_id, dict):
+        return agent_id
+    if text and _text_too_long(*text):
+        return _message_too_long(session)
+    if request_id is None:
+        return run(agent_id)
+
+    cleaned = request_id.strip()
+    if not cleaned or len(cleaned) > MAX_REQUEST_ID_LENGTH:
+        return _invalid_request_id(session)
+    cached = requests.lookup(str(agent_id), cleaned)
+    if cached is not None:
+        if cached.signature != signature:
+            return _request_id_conflict(session)
+        return dict(cached.result)
+
+    result = run(agent_id)
+    if result.get("ok"):
+        requests.store(str(agent_id), cleaned, signature, result)
+    return result
+
+
 def _text_too_long(*values: str | None) -> bool:
     return any(value is not None and len(value) > MAX_TEXT_FIELD_LENGTH for value in values)
 
@@ -577,6 +724,30 @@ def _message_too_long(session: GameSession) -> dict[str, Any]:
         "error": {
             "code": "MESSAGE_TOO_LONG",
             "message": f"text fields must be at most {MAX_TEXT_FIELD_LENGTH} characters",
+        },
+    }
+
+
+def _invalid_request_id(session: GameSession) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "schema_version": SCHEMA_VERSION,
+        "tick": session.tick,
+        "error": {
+            "code": "INVALID_REQUEST_ID",
+            "message": (f"request_id must be 1-{MAX_REQUEST_ID_LENGTH} non-blank characters"),
+        },
+    }
+
+
+def _request_id_conflict(session: GameSession) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "schema_version": SCHEMA_VERSION,
+        "tick": session.tick,
+        "error": {
+            "code": "REQUEST_ID_CONFLICT",
+            "message": "request_id was already used for a different action",
         },
     }
 

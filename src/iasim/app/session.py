@@ -1379,10 +1379,17 @@ class GameSession:
                     code,
                     f"action tick {action.tick} does not match current tick {self._state.tick}",
                     tick=action.tick,
+                    details={
+                        "received_tick": action.tick,
+                        "current_tick": self._state.tick,
+                    },
                 )
             if target in self._engine.pending_agents:
                 return self._error(
-                    "ALREADY_ACTED", "agent already acted this tick", tick=action.tick
+                    "ALREADY_ACTED",
+                    "agent already acted this tick",
+                    tick=action.tick,
+                    details={"agent_id": str(target), "tick": action.tick},
                 )
 
             try:
@@ -1935,10 +1942,14 @@ class GameSession:
         message: str,
         *,
         tick: int | None = None,
+        details: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        error: dict[str, Any] = {"code": code, "message": message}
+        if details:
+            error["details"] = dict(details)
         return {
             "ok": False,
             "schema_version": SCHEMA_VERSION,
             "tick": self._state.tick if tick is None else tick,
-            "error": {"code": code, "message": message},
+            "error": error,
         }
