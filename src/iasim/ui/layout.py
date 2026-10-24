@@ -762,6 +762,139 @@ def _render_events_footer(canvas: _Canvas, ascii_mode: bool) -> None:
     canvas.put(0, BOTTOM_BAR_Y, text, fg=theme.BAR_FG, bg=theme.BAR_BG, bold=True)
 
 
+_MAP_SCREEN_ORIGIN_X = (SCREEN_WIDTH - MAP_WIDTH) // 2
+
+
+def render_map_screen(
+    state: SessionState,
+    names: Mapping[AgentId, str],
+    *,
+    selected_agent_id: AgentId | None = None,
+    focus_mode: bool = False,
+    weather_overlay: bool = True,
+    ascii_mode: bool = False,
+) -> BaseScreen:
+    """Render the F6 enlarged map with its legend and layer help."""
+    canvas = _Canvas()
+    canvas.fill(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, fg=theme.WHITE, bg=theme.BLACK)
+    _render_map(
+        canvas,
+        state,
+        selected_agent_id,
+        ascii_mode,
+        focus_mode=focus_mode,
+        weather_overlay=weather_overlay,
+        origin_x=_MAP_SCREEN_ORIGIN_X,
+    )
+    selected = _resolve_selected(state, selected_agent_id)
+    clock = SimulationClock(state.tick_minutes)
+    clock.advance(state.tick)
+    weather = state.weather
+    mode = "FOV DEL AGENTE" if focus_mode else "MAPA COMPLETO DEL OPERADOR"
+    canvas.put(
+        2,
+        MAP_HEIGHT,
+        f"F6 · MAPA · DÍA {clock.day} · {clock.hour:02d}:{clock.minute:02d} · "
+        f"{_PHASE_LABELS[clock.phase]} · {_WEATHER_LABELS[weather.kind]} · "
+        f"{weather.temperature_c:.0f} °C · VIENTO {weather.wind} · "
+        f"VIS {weather.visibility_factor:.2f} · MODO: {mode}",
+        fg=theme.CYAN,
+        bold=True,
+    )
+    _draw_map_legend(canvas, MAP_HEIGHT + 1, ascii_mode)
+    name = "—" if selected is None else names.get(selected.agent_id, str(selected.agent_id))
+    position = "—" if selected is None else f"({selected.position.x}, {selected.position.y})"
+    canvas.put(
+        2,
+        MAP_HEIGHT + 2,
+        f"Agente: {name} {position} · Clima: "
+        f"{'ON' if weather_overlay else 'OFF'} · Capas: V FOV · W Clima · X Inspección",
+        fg=theme.WHITE,
+    )
+    canvas.put(
+        2,
+        MAP_HEIGHT + 3,
+        "Leyenda compacta arriba · ESC vuelve a la vista base 160x45 · "
+        "V alterna FOV/memoria · W alterna clima · X inspección",
+        fg=theme.DIM,
+    )
+    _render_map_footer(canvas, ascii_mode)
+    return canvas.to_screen()
+
+
+def _draw_map_legend(canvas: _Canvas, y: int, ascii_mode: bool) -> None:
+    entries: list[tuple[str, str, theme.RGB]] = [
+        (
+            theme.tile_glyph(TileType.GRASS, ascii_mode=ascii_mode),
+            "pasto",
+            theme.TILE_COLORS[TileType.GRASS],
+        ),
+        (
+            theme.tile_glyph(TileType.TREE, ascii_mode=ascii_mode),
+            "árbol",
+            theme.TILE_COLORS[TileType.TREE],
+        ),
+        (
+            theme.tile_glyph(TileType.FRESH_WATER, ascii_mode=ascii_mode),
+            "agua",
+            theme.TILE_COLORS[TileType.FRESH_WATER],
+        ),
+        (
+            theme.tile_glyph(TileType.BUSH, ascii_mode=ascii_mode),
+            "arbusto",
+            theme.TILE_COLORS[TileType.BUSH],
+        ),
+        (
+            theme.structure_glyph(StructureKind.FIRE, ascii_mode=ascii_mode),
+            "fuego",
+            theme.STRUCTURE_COLORS[StructureKind.FIRE],
+        ),
+        (
+            theme.structure_glyph(StructureKind.SHELTER, ascii_mode=ascii_mode),
+            "refugio",
+            theme.STRUCTURE_COLORS[StructureKind.SHELTER],
+        ),
+        (
+            theme.ASCII_CORPSE_GLYPH if ascii_mode else theme.CORPSE_GLYPH,
+            "cadáver",
+            theme.CORPSE_COLOR,
+        ),
+        (
+            theme.ASCII_GROUND_ITEM_GLYPH if ascii_mode else theme.GROUND_ITEM_GLYPH,
+            "objeto",
+            theme.GROUND_ITEM_COLOR,
+        ),
+        ("@", "agente", theme.AGENT_COLOR),
+        ("?" if ascii_mode else "…", "memoria", theme.MEMORY_COLOR),
+        (
+            theme.ASCII_RAIN_GLYPH if ascii_mode else theme.WEATHER_RAIN_GLYPH,
+            "clima",
+            theme.WEATHER_RAIN_COLOR,
+        ),
+    ]
+    x = 2
+    canvas.put(x, y, "LEYENDA", fg=theme.CYAN, bold=True)
+    x += 9
+    for glyph, label, color in entries:
+        segment = f"{glyph} {label}"
+        if x + len(segment) + 2 >= SCREEN_WIDTH:
+            break
+        canvas.put(x, y, glyph, fg=color, bold=True)
+        canvas.put(x + 2, y, label, fg=theme.DIM)
+        x += len(segment) + 3
+
+
+def _render_map_footer(canvas: _Canvas, ascii_mode: bool) -> None:
+    separator = theme.ASCII_VERTICAL if ascii_mode else "│"
+    footer = (
+        f"[V] FOV {separator} [W] Clima {separator} [X] Inspección {separator} "
+        f"[ESC] Volver {separator} [F6] Cerrar mapa"
+    )
+    text = (footer + " " * SCREEN_WIDTH)[:SCREEN_WIDTH]
+    canvas.fill(0, BOTTOM_BAR_Y, SCREEN_WIDTH, 1, fg=theme.BAR_FG, bg=theme.BAR_BG)
+    canvas.put(0, BOTTOM_BAR_Y, text, fg=theme.BAR_FG, bg=theme.BAR_BG, bold=True)
+
+
 def render_help_screen(*, ascii_mode: bool = False) -> BaseScreen:
     """Render the keyboard and glyph/status legend help view."""
     canvas = _Canvas()
@@ -842,6 +975,8 @@ def _render_map(
     *,
     focus_mode: bool = False,
     weather_overlay: bool = True,
+    origin_x: int = 0,
+    origin_y: int = 0,
 ) -> None:
     selected = _resolve_selected(state, selected_agent_id)
     visible_positions: frozenset[Position] | None = None
@@ -879,14 +1014,16 @@ def _render_map(
                     position,
                     memory_tiles.get(position),
                     ascii_mode,
+                    origin_x=origin_x,
+                    origin_y=origin_y,
                 )
                 continue
             tile = state.world.tile_at(position)
             background = theme.TILE_BACKGROUNDS[tile]
             color = theme.DIM if position in depleted else theme.TILE_COLORS[tile]
             canvas.put(
-                x,
-                y,
+                origin_x + x,
+                origin_y + y,
                 theme.tile_glyph(tile, ascii_mode=ascii_mode),
                 fg=color,
                 bg=background,
@@ -900,12 +1037,18 @@ def _render_map(
                 )
                 if overlay is not None:
                     glyph, overlay_color = overlay
-                    canvas.put(x, y, glyph, fg=overlay_color, bg=background)
+                    canvas.put(
+                        origin_x + x,
+                        origin_y + y,
+                        glyph,
+                        fg=overlay_color,
+                        bg=background,
+                    )
             structure = structures.get(position)
             if structure is not None:
                 canvas.put(
-                    x,
-                    y,
+                    origin_x + x,
+                    origin_y + y,
                     theme.structure_glyph(structure.kind, ascii_mode=ascii_mode),
                     fg=theme.STRUCTURE_COLORS[structure.kind],
                     bg=background,
@@ -914,17 +1057,29 @@ def _render_map(
             corpse = corpses.get(position)
             if corpse is not None:
                 glyph = theme.ASCII_CORPSE_GLYPH if ascii_mode else theme.CORPSE_GLYPH
-                canvas.put(x, y, glyph, fg=theme.CORPSE_COLOR, bg=background)
+                canvas.put(
+                    origin_x + x,
+                    origin_y + y,
+                    glyph,
+                    fg=theme.CORPSE_COLOR,
+                    bg=background,
+                )
             item = ground_items.get(position)
             if item is not None:
                 glyph = theme.ASCII_GROUND_ITEM_GLYPH if ascii_mode else theme.GROUND_ITEM_GLYPH
-                canvas.put(x, y, glyph, fg=theme.GROUND_ITEM_COLOR, bg=background)
+                canvas.put(
+                    origin_x + x,
+                    origin_y + y,
+                    glyph,
+                    fg=theme.GROUND_ITEM_COLOR,
+                    bg=background,
+                )
             agent = agents_at.get(position)
             if agent is not None:
                 is_selected = agent.agent_id == selected_agent_id
                 canvas.put(
-                    x,
-                    y,
+                    origin_x + x,
+                    origin_y + y,
                     _agent_glyph(agent, ascii_mode),
                     fg=theme.AGENT_COLOR,
                     bg=theme.SELECTED_BG if is_selected else background,
@@ -940,8 +1095,8 @@ def _render_map(
         if position in agents_at:
             continue
         canvas.put(
-            position.x,
-            position.y,
+            origin_x + position.x,
+            origin_y + position.y,
             "?" if ascii_mode else "…",
             fg=theme.MEMORY_COLOR,
             bg=theme.TILE_BACKGROUNDS[state.world.tile_at(position)],
@@ -953,24 +1108,33 @@ def _render_memory_cell(
     position: Position,
     entry: MemoryEntry | None,
     ascii_mode: bool,
+    *,
+    origin_x: int = 0,
+    origin_y: int = 0,
 ) -> None:
     """Render one remembered cell outside the current field of view."""
     if entry is None:
-        canvas.put(position.x, position.y, " ", fg=theme.BLACK, bg=theme.BLACK)
+        canvas.put(
+            origin_x + position.x,
+            origin_y + position.y,
+            " ",
+            fg=theme.BLACK,
+            bg=theme.BLACK,
+        )
         return
     color = theme.STALE_MEMORY_COLOR if entry.stale else theme.MEMORY_COLOR
     background = theme.TILE_BACKGROUNDS[entry.tile]
     canvas.put(
-        position.x,
-        position.y,
+        origin_x + position.x,
+        origin_y + position.y,
         theme.tile_glyph(entry.tile, ascii_mode=ascii_mode),
         fg=color,
         bg=background,
     )
     if entry.structure is not None:
         canvas.put(
-            position.x,
-            position.y,
+            origin_x + position.x,
+            origin_y + position.y,
             theme.structure_glyph(entry.structure, ascii_mode=ascii_mode),
             fg=color,
             bg=background,

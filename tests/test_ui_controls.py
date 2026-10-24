@@ -112,6 +112,18 @@ class UiControlTests(unittest.TestCase):
         self.assertEqual(state.view, UiView.AGENT_SHEET)
         self.assertEqual(handle_key(state, "esc", AGENTS).view, UiView.NONE)
 
+    def test_f6_opens_the_map_and_layers_stay_available(self) -> None:
+        state = handle_key(UiState(), "f6", AGENTS)
+        self.assertEqual(state.view, UiView.MAP_VIEW)
+
+        focused = handle_key(state, "v", AGENTS)
+        self.assertTrue(focused.focus_mode)
+        self.assertEqual(focused.view, UiView.MAP_VIEW)
+        toggled = handle_key(state, "w", AGENTS)
+        self.assertFalse(toggled.weather_overlay)
+        self.assertEqual(handle_key(state, "esc", AGENTS).view, UiView.NONE)
+        self.assertEqual(handle_key(state, "f6", AGENTS).view, UiView.NONE)
+
     def test_tab_cycles_agents_without_closing_the_sheet(self) -> None:
         state = handle_key(UiState(), "f2", AGENTS)
         state = handle_key(state, "2", AGENTS)

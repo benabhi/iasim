@@ -25,6 +25,7 @@ from iasim.ui.layout import (
     render_agent_screen,
     render_base_screen,
     render_help_screen,
+    render_map_screen,
     render_world_screen,
 )
 from iasim.ui.panel import PanelState, RightPanelTab
@@ -971,6 +972,118 @@ class WorldSummaryTests(unittest.TestCase):
         screen = render_world_screen(empty, {})
 
         self.assertIn("sin agentes", screen.to_text())
+
+
+class MapScreenTests(unittest.TestCase):
+    def _state(self, *, weather: WeatherState | None = None) -> SessionState:
+        tiles = [TileType.GRASS] * 64
+        tiles[3 * 8 + 3] = TileType.TREE
+        agents = (
+            Agent(AgentId("ag_01"), Position(1, 1)),
+            Agent(AgentId("ag_02"), Position(2, 2)),
+        )
+        return SessionState(
+            seed=3,
+            tick=2,
+            rng_state=3,
+            world=WorldMap(width=8, height=8, tiles=tuple(tiles)),
+            weather=weather or WeatherState(),
+            agents=agents,
+            ground_items=(
+                GroundItem(
+                    Position(6, 6),
+                    ItemStack(CATALOG.item("wood").definition, 1),
+                ),
+            ),
+            corpses=(
+                Corpse.from_agent(
+                    Agent(AgentId("ag_03"), Position(5, 5)),
+                    tick=1,
+                    cause="starvation",
+                ),
+            ),
+        )
+
+    def test_the_enlarged_map_is_centered_and_complete(self) -> None:
+        screen = render_map_screen(
+            self._state(),
+            {AgentId("ag_01"): "Nia", AgentId("ag_02"): "Kai"},
+            selected_agent_id=AgentId("ag_01"),
+        )
+
+        self.assertEqual((screen.width, screen.height), (160, 45))
+        self.assertTrue(all(len(screen.row_text(y)) == 160 for y in range(45)))
+        self.assertEqual(
+            screen.cell_at(40, 0).char,
+            theme.tile_glyph(TileType.GRASS),
+        )
+        self.assertEqual(screen.cell_at(43, 3).char, theme.tile_glyph(TileType.TREE))
+        self.assertEqual(screen.cell_at(41, 1).char, "@")
+        self.assertEqual(screen.cell_at(45, 5).char, theme.CORPSE_GLYPH)
+        self.assertEqual(screen.cell_at(46, 6).char, theme.GROUND_ITEM_GLYPH)
+        self.assertEqual(screen.cell_at(0, 0).char, " ")
+
+    def test_header_legend_and_layer_help_are_readable(self) -> None:
+        screen = render_map_screen(
+            self._state(),
+            {AgentId("ag_01"): "Nia", AgentId("ag_02"): "Kai"},
+            selected_agent_id=AgentId("ag_01"),
+        )
+        text = "\n".join(screen.row_text(y) for y in range(40, 45))
+
+        for expected in (
+            "F6 · MAPA",
+            "MAPA COMPLETO DEL OPERADOR",
+            "LEYENDA",
+            "árbol",
+            "fuego",
+            "refugio",
+            "cadáver",
+            "objeto",
+            "agente",
+            "memoria",
+            "clima",
+            "Agente: Nia",
+            "Capas: V FOV",
+            "[V] FOV",
+            "[W] Clima",
+            "[X] Inspección",
+            "[ESC] Volver",
+            "[F6] Cerrar mapa",
+        ):
+            self.assertIn(expected, text)
+
+    def test_focus_mode_uses_the_selected_agent_fov(self) -> None:
+        screen = render_map_screen(
+            self._state(),
+            {AgentId("ag_01"): "Nia"},
+            selected_agent_id=AgentId("ag_01"),
+            focus_mode=True,
+            weather_overlay=False,
+        )
+        text = screen.to_text()
+
+        self.assertIn("FOV DEL AGENTE", text)
+        self.assertEqual(screen.cell_at(47, 7).char, " ")
+
+    def test_the_weather_layer_can_be_toggled(self) -> None:
+        state = self._state(weather=WeatherState(kind=WeatherKind.RAIN, remaining_ticks=5, wind=4))
+
+        with_overlay = render_map_screen(state, {}, weather_overlay=True)
+        without_overlay = render_map_screen(state, {}, weather_overlay=False)
+
+        self.assertIn("LLUVIA", with_overlay.to_text())
+        self.assertNotEqual(with_overlay.to_text(), without_overlay.to_text())
+        self.assertIn("Clima: OFF", without_overlay.to_text())
+
+    def test_the_selected_agent_line_follows_the_selection(self) -> None:
+        screen = render_map_screen(
+            self._state(),
+            {AgentId("ag_01"): "Nia", AgentId("ag_02"): "Kai"},
+            selected_agent_id=AgentId("ag_02"),
+        )
+
+        self.assertIn("Agente: Kai (2, 2)", screen.to_text())
 
 
 if __name__ == "__main__":
