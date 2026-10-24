@@ -17,6 +17,7 @@ from iasim.ui.layout import (
     render_base_screen,
     render_events_screen,
     render_help_screen,
+    render_map_screen,
     render_world_screen,
 )
 from iasim.ui.panel import PANEL_TABS, TAB_LABELS, PanelState, RightPanelTab
@@ -42,5 +43,6 @@ __all__ = [
     "render_base_screen",
     "render_events_screen",
     "render_help_screen",
+    "render_map_screen",
     "render_world_screen",
 ]

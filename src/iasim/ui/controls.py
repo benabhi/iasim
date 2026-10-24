@@ -30,6 +30,7 @@ KEY_GUIDE: tuple[tuple[str, str], ...] = (
     ("F2", "Abrir / cerrar ficha completa del agente"),
     ("F3", "Abrir / cerrar resumen del mundo"),
     ("F4", "Abrir / cerrar registro de eventos"),
+    ("F6", "Abrir / cerrar mapa ampliado"),
     ("/", "Buscar en el registro de eventos"),
     ("T / A", "Filtrar eventos por tipo o agente"),
     ("PgUp/PgDn", "Paginar el registro de eventos"),
@@ -67,6 +68,7 @@ class UiView(StrEnum):
     AGENT_SHEET = "agent_sheet"
     WORLD_SUMMARY = "world_summary"
     EVENT_LOG = "event_log"
+    MAP_VIEW = "map_view"
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +151,10 @@ def handle_key(
     if normalized == "f4":
         view = UiView.NONE if state.view is UiView.EVENT_LOG else UiView.EVENT_LOG
         return replace(state, view=view, event_search_open=False)
+
+    if normalized == "f6":
+        view = UiView.NONE if state.view is UiView.MAP_VIEW else UiView.MAP_VIEW
+        return replace(state, view=view)
 
     if normalized == "enter" and state.view is UiView.WORLD_SUMMARY:
         return replace(state, view=UiView.AGENT_SHEET)
