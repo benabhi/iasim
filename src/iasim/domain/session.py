@@ -11,6 +11,7 @@ from iasim.domain.items import GroundItem
 from iasim.domain.resources import ResourceNode
 from iasim.domain.rng import U64_MASK
 from iasim.domain.tiles import WorldMap
+from iasim.domain.trades import TradeOffer
 from iasim.domain.weather import WeatherState
 from iasim.domain.world import Structure
 
@@ -31,6 +32,7 @@ class SessionState:
     resource_nodes: tuple[ResourceNode, ...] = ()
     corpses: tuple[Corpse, ...] = ()
     alliances: tuple[Alliance, ...] = ()
+    trades: tuple[TradeOffer, ...] = ()
 
     def __post_init__(self) -> None:
         if self.seed < 0:
@@ -85,3 +87,9 @@ class SessionState:
             raise ValueError("session must not contain duplicate alliance ids")
         if alliance_ids != sorted(alliance_ids):
             raise ValueError("session alliances must be sorted by alliance id")
+
+        trade_ids = [trade.trade_id for trade in self.trades]
+        if len(trade_ids) != len(set(trade_ids)):
+            raise ValueError("session must not contain duplicate trade ids")
+        if trade_ids != sorted(trade_ids):
+            raise ValueError("session trades must be sorted by trade id")

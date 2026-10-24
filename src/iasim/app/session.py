@@ -69,6 +69,14 @@ from iasim.domain.status import (
 )
 from iasim.domain.text import sanitize_text
 from iasim.domain.throwing import throw_resolvers
+from iasim.domain.trade_actions import trade_resolvers
+from iasim.domain.trades import (
+    drop_agent_trades,
+    drop_departed_trades,
+    expire_trades,
+    open_trades,
+    parse_lot,
+)
 from iasim.domain.turns import (
     ActionRejectedError,
     ResolvedAction,
@@ -212,6 +220,7 @@ class GameSession:
             **loot_resolvers(),
             **rest_sleep_resolvers(),
             **alliance_resolvers(),
+            **trade_resolvers(),
         }
         self._phase = SessionPhase.WAITING
         self._waiting_reason: SessionWaitReason | None = SessionWaitReason.NO_AGENTS
@@ -359,6 +368,7 @@ class GameSession:
                 self._state,
                 agents=(*self._state.agents, agent),
                 alliances=drop_agent_alliances(self._state.alliances, agent_id),
+                trades=drop_agent_trades(self._state.trades, agent_id),
             )
             self._engine = TurnEngine(
                 self._state,
@@ -402,9 +412,16 @@ class GameSession:
                 )
 
             token = self._token_for_agent_locked(target)
-            remaining = drop_agent_alliances(self._state.alliances, target)
-            if len(remaining) != len(self._state.alliances):
-                self._state = replace(self._state, alliances=remaining)
+            remaining_alliances = drop_agent_alliances(self._state.alliances, target)
+            remaining_trades = drop_agent_trades(self._state.trades, target)
+            if len(remaining_alliances) != len(self._state.alliances) or len(
+                remaining_trades
+            ) != len(self._state.trades):
+                self._state = replace(
+                    self._state,
+                    alliances=remaining_alliances,
+                    trades=remaining_trades,
+                )
                 self._engine.replace_state(self._state)
             self._engine.remove_agent(target)
             self._state = self._engine.state
@@ -986,6 +1003,52 @@ class GameSession:
             (("target_id", target_id),),
         )
 
+    def offer_trade(
+        self,
+        agent_id: str,
+        tick: int,
+        target_id: str,
+        offer: object,
+        request: object,
+    ) -> dict[str, Any]:
+        """Queue an item trade offer to a nearby living agent."""
+        parsed_offer = parse_lot(offer)
+        parsed_request = parse_lot(request)
+        if parsed_offer is None or parsed_request is None:
+            return self._error(
+                "INVALID_TRADE",
+                "offer and request must be non-empty lists of {item_id, qty}",
+                tick=tick,
+            )
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.OFFER_TRADE,
+            (
+                ("target_id", target_id),
+                ("offer", parsed_offer),
+                ("request", parsed_request),
+            ),
+        )
+
+    def accept_trade(self, agent_id: str, tick: int, trade_id: str) -> dict[str, Any]:
+        """Queue accepting one open trade offer."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.ACCEPT_TRADE,
+            (("trade_id", trade_id),),
+        )
+
+    def decline_trade(self, agent_id: str, tick: int, trade_id: str) -> dict[str, Any]:
+        """Queue declining one open trade offer."""
+        return self._queue(
+            agent_id,
+            tick,
+            ActionKind.DECLINE_TRADE,
+            (("trade_id", trade_id),),
+        )
+
     def _queue(
         self,
         agent_id: str,
@@ -1477,6 +1540,13 @@ class GameSession:
                     }
                     for alliance in pending_offers(self._state.alliances, agent.agent_id)
                 ],
+                "trades": [
+                    {
+                        **trade.as_observation(),
+                        "mine": trade.proposer_id == agent.agent_id,
+                    }
+                    for trade in open_trades(self._state.trades, agent.agent_id)
+                ],
             },
             "available_actions": [
                 {"action": "move", "available": True},
@@ -1498,6 +1568,9 @@ class GameSession:
                 {"action": "offer_alliance", "available": True},
                 {"action": "accept_alliance", "available": True},
                 {"action": "break_alliance", "available": True},
+                {"action": "offer_trade", "available": True},
+                {"action": "accept_trade", "available": True},
+                {"action": "decline_trade", "available": True},
                 {"action": "rest", "available": True},
                 {"action": "sleep", "available": True},
             ],
@@ -1543,6 +1616,7 @@ class GameSession:
                 state.resource_nodes,
                 tick=state.tick + 1,
             ),
+            trades=expire_trades(state.trades, tick=state.tick + 1),
         )
         self._advance_chat_locked(state.tick + 1)
         return self._update_memory_locked(state)
@@ -1576,6 +1650,7 @@ class GameSession:
             agents=tuple(agents),
             corpses=tuple(corpses),
             alliances=drop_departed_alliances(state.alliances, alive),
+            trades=drop_departed_trades(state.trades, alive),
         )
 
     def _advance_chat_locked(self, tick: int) -> None:

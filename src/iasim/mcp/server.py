@@ -352,6 +352,44 @@ def create_server(
         return session.break_alliance(agent_id, tick, target_id)
 
     @server.tool()
+    def iasim_offer_trade(
+        tick: int,
+        target_id: str,
+        offer: list[dict[str, Any]],
+        request: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Offer an item trade to a nearby living agent.
+
+        Each lot is a list of ``{"item_id": str, "qty": int}`` entries.
+        """
+        agent_id = _guard(session, limiter, LimitKind.ACTION)
+        if isinstance(agent_id, dict):
+            return agent_id
+        if _text_too_long(target_id):
+            return _message_too_long(session)
+        return session.offer_trade(agent_id, tick, target_id, offer, request)
+
+    @server.tool()
+    def iasim_accept_trade(tick: int, trade_id: str) -> dict[str, Any]:
+        """Accept an open trade offer and swap the items atomically."""
+        agent_id = _guard(session, limiter, LimitKind.ACTION)
+        if isinstance(agent_id, dict):
+            return agent_id
+        if _text_too_long(trade_id):
+            return _message_too_long(session)
+        return session.accept_trade(agent_id, tick, trade_id)
+
+    @server.tool()
+    def iasim_decline_trade(tick: int, trade_id: str) -> dict[str, Any]:
+        """Decline an open trade offer."""
+        agent_id = _guard(session, limiter, LimitKind.ACTION)
+        if isinstance(agent_id, dict):
+            return agent_id
+        if _text_too_long(trade_id):
+            return _message_too_long(session)
+        return session.decline_trade(agent_id, tick, trade_id)
+
+    @server.tool()
     def iasim_report_mind(
         tick: int,
         intent: str,

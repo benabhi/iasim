@@ -22,7 +22,9 @@ class ActionKind(StrEnum):
     CRAFT = "craft"
     BUILD = "build"
     USE_ITEM = "use_item"
-    TRADE = "trade"
+    OFFER_TRADE = "offer_trade"
+    ACCEPT_TRADE = "accept_trade"
+    DECLINE_TRADE = "decline_trade"
     OFFER_ALLIANCE = "offer_alliance"
     ACCEPT_ALLIANCE = "accept_alliance"
     BREAK_ALLIANCE = "break_alliance"
@@ -57,7 +59,9 @@ _ACTION_ORDER: dict[ActionKind, int] = {
     ActionKind.FILL: 4,
     ActionKind.USE_ITEM: 4,
     ActionKind.LOOT: 4,
-    ActionKind.TRADE: 5,
+    ActionKind.OFFER_TRADE: 5,
+    ActionKind.ACCEPT_TRADE: 5,
+    ActionKind.DECLINE_TRADE: 5,
     ActionKind.OFFER_ALLIANCE: 5,
     ActionKind.ACCEPT_ALLIANCE: 5,
     ActionKind.BREAK_ALLIANCE: 5,
