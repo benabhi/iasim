@@ -143,19 +143,32 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return int(ExitCode.CONFIGURATION)
         try:
-            session = GameSession(
-                seed,
-                tick_minutes=config.game.tick_minutes,
-                turn_timeout_ms=config.game.turn_timeout_ms,
-                timeout_disconnects=config.game.timeout_disconnects,
-                max_agents=config.game.max_agents,
-                token_path=run_dir / "agents.json",
-                weather_min_ticks=config.weather.weather_min_ticks,
-                weather_max_ticks=config.weather.weather_max_ticks,
-                usage_pricing=_usage_pricing(config),
-                log_dir=run_dir,
-                snapshot_every_ticks=config.logs.snapshot_every_ticks,
-            )
+            if args.load is not None:
+                session = GameSession.load(
+                    args.load,
+                    token_path=args.load.parent / "agents.json",
+                    log_dir=run_dir,
+                    snapshot_every_ticks=config.logs.snapshot_every_ticks,
+                    turn_timeout_ms=config.game.turn_timeout_ms,
+                    timeout_disconnects=config.game.timeout_disconnects,
+                    weather_min_ticks=config.weather.weather_min_ticks,
+                    weather_max_ticks=config.weather.weather_max_ticks,
+                    usage_pricing=_usage_pricing(config),
+                )
+            else:
+                session = GameSession(
+                    seed,
+                    tick_minutes=config.game.tick_minutes,
+                    turn_timeout_ms=config.game.turn_timeout_ms,
+                    timeout_disconnects=config.game.timeout_disconnects,
+                    max_agents=config.game.max_agents,
+                    token_path=run_dir / "agents.json",
+                    weather_min_ticks=config.weather.weather_min_ticks,
+                    weather_max_ticks=config.weather.weather_max_ticks,
+                    usage_pricing=_usage_pricing(config),
+                    log_dir=run_dir,
+                    snapshot_every_ticks=config.logs.snapshot_every_ticks,
+                )
             run_server(session, host=config.mcp.host, port=config.mcp.port)
         except KeyboardInterrupt:
             print("MCP server stopped")
