@@ -38,7 +38,7 @@ NAMES = {
     AgentId("ag_02"): "Kai",
     AgentId("ag_03"): "Luma",
 }
-GOLDEN_HASH = "5b0ab8cf5b6c0bc0f086c2064056665bc5e38192eabda7d7bcaedaa68456d3e5"
+GOLDEN_HASH = "5bc8272d96d037ffc93203980a3408722718d6df5e91a3d30972d8f4f5aa7491"
 
 
 def _state() -> SessionState:
@@ -1084,6 +1084,138 @@ class MapScreenTests(unittest.TestCase):
         )
 
         self.assertIn("Agente: Kai (2, 2)", screen.to_text())
+
+
+class ConnectionLifecycleTests(unittest.TestCase):
+    def _state(self) -> SessionState:
+        catalog = load_catalog()
+        absent = Agent(
+            AgentId("ag_02"),
+            Position(3, 2),
+            status=AgentStatus.ABSENT,
+        )
+        dead = Agent(
+            AgentId("ag_03"),
+            Position(2, 3),
+            attributes=AgentAttributes(health_centi=0),
+            status=AgentStatus.DEAD,
+            inventory=Inventory.for_strength(5).add(ItemStack(catalog.item("wood").definition, 2)),
+        )
+        return SessionState(
+            seed=1,
+            tick=4,
+            rng_state=1,
+            world=WorldMap(width=6, height=6, tiles=(TileType.GRASS,) * 36),
+            agents=(
+                Agent(AgentId("ag_01"), Position(2, 2)),
+                absent,
+                dead,
+            ),
+            corpses=(Corpse.from_agent(dead, tick=2, cause="attack"),),
+        )
+
+    def _panel_text(self, screen) -> str:
+        return "\n".join(screen.row_text(y)[80:] for y in range(44))
+
+    def test_connection_states_and_free_slots_are_distinguishable(self) -> None:
+        screen = render_base_screen(
+            self._state(),
+            {
+                AgentId("ag_01"): "Nia",
+                AgentId("ag_02"): "Kai",
+                AgentId("ag_03"): "Luma",
+            },
+            selected_agent_id=AgentId("ag_01"),
+            capacity=5,
+        )
+        panel = self._panel_text(screen)
+
+        self.assertIn("1 con", panel)
+        self.assertIn("1 aus", panel)
+        self.assertIn("1 mue", panel)
+        self.assertIn("2 lib", panel)
+        self.assertIn("LIBRES: ag_04, ag_05", panel)
+        self.assertIn("ausente", panel)
+        self.assertIn("muerto por attack", panel)
+        self.assertNotIn("ag_06", panel)
+
+    def test_waiting_reasons_are_labelled(self) -> None:
+        labels = {
+            "no_agents": "SIN AGENTES",
+            "last_death": "ÚLTIMA MUERTE",
+            "no_active_agents": "SIN AGENTES ACTIVOS",
+        }
+        for reason, label in labels.items():
+            with self.subTest(reason=reason):
+                screen = render_base_screen(
+                    self._state(),
+                    {},
+                    selected_agent_id=AgentId("ag_01"),
+                    waiting_reason=reason,
+                )
+                panel = self._panel_text(screen)
+                self.assertIn("ESPERANDO AGENTES", panel)
+                self.assertIn(label, panel)
+
+    def test_disconnected_agents_leave_no_ghost_row(self) -> None:
+        state = self._state()
+        names = {
+            AgentId("ag_01"): "Nia",
+            AgentId("ag_02"): "Kai",
+            AgentId("ag_09"): "Fantasma",
+        }
+
+        screen = render_base_screen(
+            state,
+            names,
+            selected_agent_id=AgentId("ag_01"),
+            capacity=5,
+        )
+
+        self.assertNotIn("Fantasma", self._panel_text(screen))
+
+    def test_the_compact_strip_marks_absent_agents_and_free_slots(self) -> None:
+        screen = render_base_screen(
+            self._state(),
+            {AgentId("ag_01"): "Nia", AgentId("ag_02"): "Kai"},
+            selected_agent_id=AgentId("ag_01"),
+            capacity=5,
+            panel=PanelState(tab=RightPanelTab.EVENTS),
+            events=["evento"],
+        )
+        panel = self._panel_text(screen)
+
+        self.assertIn("…", panel)
+        self.assertIn("+2 libres", panel)
+
+    def test_corpse_loot_is_visible_for_the_dead_selection(self) -> None:
+        screen = render_base_screen(
+            self._state(),
+            {
+                AgentId("ag_01"): "Nia",
+                AgentId("ag_02"): "Kai",
+                AgentId("ag_03"): "Luma",
+            },
+            selected_agent_id=AgentId("ag_03"),
+            capacity=5,
+        )
+        panel = self._panel_text(screen)
+
+        self.assertIn("CADÁVER", panel)
+        self.assertIn("Botín: wood x2", panel)
+
+    def test_the_links_tab_shows_corpse_details(self) -> None:
+        screen = render_base_screen(
+            self._state(),
+            {AgentId("ag_01"): "Nia", AgentId("ag_03"): "Luma"},
+            selected_agent_id=AgentId("ag_03"),
+            capacity=5,
+            panel=PanelState(tab=RightPanelTab.LINKS),
+        )
+        panel = self._panel_text(screen)
+
+        self.assertIn("CADÁVER", panel)
+        self.assertIn("Botín: wood x2", panel)
 
 
 if __name__ == "__main__":
